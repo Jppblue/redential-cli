@@ -56,6 +56,13 @@ schema, (3) entrada en docs/schema.md y CHANGELOG.md.
   repo privado de empleador hosteado en github.com; bloquear ahí rompería
   el producto. La verificación real de visibilidad queda para `submit`
   (que sí tiene red).
+- Al cerrar cada hito o tarea grande, ANTES del commit: escribí en el
+  chat una "Explicación para el dueño" — máximo 10 líneas, en español
+  simple, sin jerga técnica. Debe responder: (1) qué construimos y para
+  qué sirve, (2) las 2-3 decisiones importantes y POR QUÉ, (3) qué se
+  rompería si alguien toca mal cada pieza clave. Pensada para que un
+  no-programador que dirige el producto pueda re-explicarla a otra
+  persona. NO es documentación técnica — esa va en docs/ como siempre.
 
 ## Límites para agentes
 
@@ -85,3 +92,4 @@ schema, (3) entrada en docs/schema.md y CHANGELOG.md.
   `reviewer` devuelva "VERDICT: APPROVED". Si devuelve CHANGES REQUIRED,
   implementá los cambios y volvé a someterlo. El commit va después de la
   aprobación, nunca antes.
+
