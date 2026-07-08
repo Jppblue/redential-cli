@@ -7,6 +7,19 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+### Fixed
+- `redential login`: polling `/api/cli/device/token` no longer treats
+  `authorization_pending`/`slow_down` as a fatal network failure. The real
+  server (RFC 8628 shape) returns every `{error: "..."}` state as HTTP 400,
+  reserving 200 for `{access_token}` success — but the shared `postJson`
+  helper throws on any non-2xx before reading the body, so the very first
+  poll during normal waiting killed the whole login flow. New `pollJson`
+  (`src/http-client.ts`), used only by the token poll, parses the body on
+  both 200 and 400; the poll loop's existing handling of
+  `authorization_pending`/`slow_down`/`access_denied`/`expired_token` is
+  unchanged. `docs/login-submit.md` now states the HTTP status for each
+  response shape explicitly.
+
 ### Added
 - `redential login`, `redential submit`, `redential logout`: the first
   network-touching commands, per principle 1 ("the only network calls are

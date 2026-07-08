@@ -65,6 +65,38 @@ export async function postRawJson<T>(
 }
 
 /**
+ * Like postJson, but for the device-token poll endpoint only: RFC 8628
+ * device flow returns EVERY `{error: "..."}` state — including the
+ * non-terminal authorization_pending/slow_down the CLI is expected to keep
+ * polling through — as HTTP 400, reserving 200 for `{access_token}` success
+ * (see docs/login-submit.md). Treats 200 and 400 alike as "parse the body";
+ * any other status is still a real failure. Same error-message discipline
+ * as postJson: built from the host and status only, never from response
+ * headers or body, so a failure here can never echo a bearer token.
+ */
+export async function pollJson<T>(url: string, body: unknown): Promise<T> {
+  const host = new URL(url).host;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new NetworkError(`Could not reach ${host}.`);
+  }
+  if (!res.ok && res.status !== 400) {
+    throw new NetworkError(`Request to ${host} failed with status ${res.status}.`);
+  }
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new NetworkError(`Response from ${host} was not valid JSON.`);
+  }
+}
+
+/**
  * Anonymous HEAD request used only by submit's remote-visibility gate — the
  * request target is the repo's own remote host, never SITE_URL. Returns
  * null (not a thrown error) on any network failure/timeout: an inconclusive

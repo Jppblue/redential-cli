@@ -1,7 +1,7 @@
 import { AuthError } from "./errors.js";
 import { getSiteUrl } from "./config.js";
 import { saveCredentials } from "./credentials.js";
-import { postJson } from "./http-client.js";
+import { postJson, pollJson } from "./http-client.js";
 
 interface DeviceAuthorization {
   device_code: string;
@@ -21,7 +21,10 @@ function requestDeviceAuthorization(siteUrl: string): Promise<DeviceAuthorizatio
 }
 
 function pollDeviceToken(siteUrl: string, deviceCode: string): Promise<DeviceTokenResponse> {
-  return postJson<DeviceTokenResponse>(`${siteUrl}/api/cli/device/token`, { device_code: deviceCode });
+  // Not postJson: this endpoint returns HTTP 400 for authorization_pending/
+  // slow_down too (RFC 8628 shape), which postJson would treat as a fatal
+  // NetworkError before ever reading the body.
+  return pollJson<DeviceTokenResponse>(`${siteUrl}/api/cli/device/token`, { device_code: deviceCode });
 }
 
 export interface LoginOptions {

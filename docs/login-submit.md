@@ -26,13 +26,23 @@ for local development/testing against a mock server).
    surprise network/process spawn).
 3. The CLI polls `POST {SITE_URL}/api/cli/device/token` with
    `{device_code}` every `interval` seconds until:
-   - `{access_token}` — success, stored locally (see below).
-   - `{error: "authorization_pending"}` — keep polling.
-   - `{error: "slow_down"}` — keep polling, backing off by 5s.
-   - `{error: "access_denied"}` or `{error: "expired_token"}` — abort with
-     a non-zero exit code.
+   - `{access_token}`, **HTTP 200** — success, stored locally (see below).
+   - `{error: "authorization_pending"}`, **HTTP 400** — keep polling.
+   - `{error: "slow_down"}`, **HTTP 400** — keep polling, backing off by 5s.
+   - `{error: "access_denied"}` or `{error: "expired_token"}`, **HTTP 400**
+     — abort with a non-zero exit code.
    - Polling also aborts once `expires_in` seconds have elapsed without a
      terminal response.
+
+   The endpoint uses HTTP 400 as part of its normal vocabulary — it's the
+   status for every `{error: "..."}` shape, not just the terminal ones —
+   since RFC 8628's `authorization_pending`/`slow_down` are non-fatal states
+   the client is expected to poll through. The CLI's HTTP layer must read
+   the body on a 400 from this endpoint instead of treating it as a failed
+   request (see `pollJson` in `src/http-client.ts`, used only here — every
+   other request in this doc treats non-2xx as a real failure). Any error
+   value not listed above (e.g. a malformed request) is treated as an
+   unexpected response and aborts, same as a truly unrecognized shape.
 
 Nothing except the device code itself is ever sent during this flow.
 

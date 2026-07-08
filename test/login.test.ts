@@ -45,7 +45,10 @@ describe("runLogin (device flow against a mocked local server)", () => {
       }
       if (req.url === "/api/cli/device/token") {
         pollCount++;
-        if (pollCount < 2) return { status: 200, body: { error: "authorization_pending" } };
+        // The real server (RFC 8628 shape) returns authorization_pending as
+        // HTTP 400, not 200 — reproducing that here is what actually
+        // exercises the poll loop's handling of the real contract.
+        if (pollCount < 2) return { status: 400, body: { error: "authorization_pending" } };
         return { status: 200, body: { access_token: "secret-token-abc" } };
       }
       return { status: 404, body: {} };
@@ -79,7 +82,7 @@ describe("runLogin (device flow against a mocked local server)", () => {
         };
       }
       pollCount++;
-      if (pollCount === 1) return { status: 200, body: { error: "slow_down" } };
+      if (pollCount === 1) return { status: 400, body: { error: "slow_down" } };
       return { status: 200, body: { access_token: "tok" } };
     });
     servers.push(server);
@@ -98,7 +101,7 @@ describe("runLogin (device flow against a mocked local server)", () => {
           body: { device_code: "dc-3", user_code: "X", verification_uri: "http://x", expires_in: 600, interval: 0 },
         };
       }
-      return { status: 200, body: { error: "access_denied" } };
+      return { status: 400, body: { error: "access_denied" } };
     });
     servers.push(server);
     process.env.REDENTIAL_SITE_URL = server.url;
@@ -115,7 +118,7 @@ describe("runLogin (device flow against a mocked local server)", () => {
           body: { device_code: "dc-4", user_code: "X", verification_uri: "http://x", expires_in: 600, interval: 0 },
         };
       }
-      return { status: 200, body: { error: "expired_token" } };
+      return { status: 400, body: { error: "expired_token" } };
     });
     servers.push(server);
     process.env.REDENTIAL_SITE_URL = server.url;
@@ -134,7 +137,7 @@ describe("runLogin (device flow against a mocked local server)", () => {
           body: { device_code: "dc-5", user_code: "X", verification_uri: "http://x", expires_in: -1, interval: 0 },
         };
       }
-      return { status: 200, body: { error: "authorization_pending" } };
+      return { status: 400, body: { error: "authorization_pending" } };
     });
     servers.push(server);
     process.env.REDENTIAL_SITE_URL = server.url;
