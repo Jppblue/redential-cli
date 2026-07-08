@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://redential.com/schema/bundle.v1.json",
+  "title": "Redential proof bundle v1",
+  "description": "Metadata-only proof of git activity. This schema IS the trust contract: nothing outside it ever leaves the user's machine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "runner", "tool_version", "created_at",
+    "repo", "identity", "commits", "signed", "languages",
+    "categories", "ownership", "integrity", "attestation"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "runner": { "enum": ["local", "ci"] },
+    "tool_version": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_type", "age_days", "repo_fingerprint"],
+      "properties": {
+        "host_type": { "enum": ["github", "gitlab", "bitbucket", "other", "none"] },
+        "age_days": { "type": "integer", "minimum": 0 },
+        "repo_fingerprint": {
+          "type": "string",
+          "description": "Salted hash of the root commit sha. Lets the server detect re-submissions of the same repo without knowing which repo it is."
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["author_identity_hashes", "other_contributors_count"],
+      "properties": {
+        "author_identity_hashes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "Salted hashes of the author emails the USER explicitly selected as their own. Never plaintext, never anyone else's."
+        },
+        "other_contributors_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "commits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_total", "first_at", "last_at", "span_days", "hour_histogram", "weekday_histogram"],
+      "properties": {
+        "user_total": { "type": "integer", "minimum": 0 },
+        "first_at": { "type": "string", "format": "date-time" },
+        "last_at": { "type": "string", "format": "date-time" },
+        "span_days": { "type": "integer", "minimum": 0 },
+        "hour_histogram": {
+          "type": "array", "minItems": 24, "maxItems": 24,
+          "items": { "type": "integer", "minimum": 0 },
+          "description": "Commits per hour-of-day (UTC). Behavioral fingerprint anchor."
+        },
+        "weekday_histogram": {
+          "type": "array", "minItems": 7, "maxItems": 7,
+          "items": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "signed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "ratio"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "key_types": {
+          "type": "array",
+          "items": { "enum": ["gpg", "ssh", "x509"] }
+        }
+      }
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["extension", "share"],
+        "properties": {
+          "extension": { "type": "string", "pattern": "^\\.[a-z0-9]+$" },
+          "share": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "categories": {
+      "type": "array",
+      "description": "Technical categories inferred LOCALLY from paths/extensions before hashing. The category survives; the path does not.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "commit_count", "churn_share"],
+        "properties": {
+          "name": {
+            "enum": ["auth", "payments", "infra", "frontend", "backend", "data", "testing", "ai-workflow", "docs", "other"]
+          },
+          "commit_count": { "type": "integer", "minimum": 0 },
+          "churn_share": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "ai_workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "co_authored_by_agent_count": { "type": "integer", "minimum": 0 },
+        "agent_config_present": {
+          "type": "array",
+          "items": { "enum": ["claude", "cursor", "aider", "copilot", "other"] },
+          "description": "Which agent tooling signals were detected (e.g. CLAUDE.md present). Booleans by tool family, never file contents."
+        }
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_commit_ratio"],
+      "properties": {
+        "user_commit_ratio": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["merkle_root", "algorithm"],
+      "properties": {
+        "merkle_root": {
+          "type": "string",
+          "description": "Merkle root over the user's commit shas. Enables future re-verification and consistency checks without revealing the shas."
+        },
+        "algorithm": { "const": "sha256" }
+      }
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorized_confirmation", "confirmed_at"],
+      "properties": {
+        "authorized_confirmation": {
+          "const": true,
+          "description": "The user explicitly confirmed: 'I am authorized to analyze this repository.'"
+        },
+        "confirmed_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
