@@ -8,6 +8,53 @@ always bump at least minor; breaking schema changes bump major.
 ## [Unreleased]
 
 ### Added
+- `redential login`, `redential submit`, `redential logout`: the first
+  network-touching commands, per principle 1 ("the only network calls are
+  login (device flow) and submit"). See
+  [docs/login-submit.md](docs/login-submit.md).
+  - `login`: RFC 8628-shaped device authorization flow against `SITE_URL`
+    (public constant, overridable via `REDENTIAL_SITE_URL`). No backend for
+    this exists yet in `redence` — this doc defines the contract redence
+    implements against, not something mirrored from existing code. Stores
+    `{access_token, site_url, obtained_at}` at
+    `~/.config/redential/credentials.json`, mode `0600` (same pattern as the
+    device salt). `submit` refuses a stored token whose `site_url` doesn't
+    match the current `SITE_URL`.
+  - `submit`: builds the bundle through the exact same
+    `buildBundleInteractively` path `scan` uses (`src/build-bundle.ts`,
+    extracted from `scan-command.ts` so both commands share it), prints it,
+    then asks a **separate** "Upload this bundle?" confirmation
+    (`--confirm-upload`) distinct from the authorization attestation
+    (`--yes`) — consenting to be scanned and consenting to upload are
+    different decisions. The exact printed string is what's sent
+    (`postRawJson`, not a re-serialization), closing the byte-for-byte gap
+    `docs/privacy-tests.md` had tracked since the `scan` milestone.
+  - Remote-visibility gate (`src/submit.ts`'s `checkVisibilityGate`):
+    implements the `TODO` left in `src/public-remote.ts` — an anonymous
+    `HEAD` request straight to the remote URL itself (never to `SITE_URL`),
+    gated on the existing local `isKnownPublicHost` heuristic. A confirmed
+    `2xx`/`3xx` blocks `submit` (with a GitHub App suggestion); anything
+    inconclusive (network error, timeout, private/`4xx`) fails open, same
+    as `scan`'s warn-only stance. `scan` itself is unchanged — still zero
+    network, still warn-never-block.
+  - `logout`: deletes `credentials.json` if present; a no-op, not an error,
+    if there's nothing to delete.
+  - No new dependencies: Node 20's global `fetch`/`Response`/`AbortSignal`
+    typecheck cleanly under this project's existing `tsconfig.json` without
+    any ambient shims. Network calls are confined to three files
+    (`http-client.ts`, `login.ts`, `submit.ts`) —
+    `test/privacy/zero-network.test.ts`'s static backstop now allowlists
+    exactly those three instead of asserting all of `src/` is network-free, since that
+    blanket assertion contradicted principle 1 once login/submit existed;
+    its runtime-mocked proof (now also stubbing `fetch`, not just
+    `node:http`/`node:https`) still proves the full `scan` path makes zero
+    network calls.
+  - Errors are one of `ScanError`/`AuthError`/`SubmitError`/`NetworkError`
+    (`src/errors.ts`); `NetworkError` messages are built only from a
+    request's host and status, never headers or body, so a failed request
+    can never echo the bearer token or bundle content into a printed error.
+    EOF on `submit`'s new upload-confirmation prompt aborts non-zero, same
+    as `scan`'s existing prompts.
 - Repo scaffolding: principles, schema draft (bundle v1), contributing and
   security policies.
 - `detected_skills` field in the bundle v1 draft schema: array of

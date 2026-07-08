@@ -36,6 +36,7 @@ declare module "node:fs" {
     path: string,
     options?: { recursive?: boolean }
   ): void;
+  export function unlinkSync(path: string): void;
 }
 
 declare module "node:path" {

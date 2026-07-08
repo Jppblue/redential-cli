@@ -12,14 +12,11 @@ const KNOWN_PUBLIC_HOSTS = [/github\.com/, /gitlab\.com/, /bitbucket\.org/];
  * private employer repo hosted on github.com, so this must never block
  * scanning — see publicHostWarning below and docs/privacy-tests.md.
  *
- * TODO(submit milestone): the only way to actually tell "public" from
- * "private-but-on-a-public-host" is a network check — out of bounds for
- * `scan` (zero network, inviolable) but fine for `submit`, which already
- * makes network calls. Do an anonymous HEAD request directly to the
- * remote URL at submit time (never sent to Redential's servers — it never
- * leaves the user's machine as a request target) and use a real 2xx/3xx
- * vs 404/private response to decide whether to still suggest the GitHub
- * App, instead of this local heuristic.
+ * The real, network-backed check lives in submit.ts's checkVisibilityGate:
+ * an anonymous HEAD request made directly to the remote URL itself (never
+ * to Redential's servers), gated on isKnownPublicHost being true here
+ * first. `scan` never calls it — only `submit`, which already makes
+ * network calls, may.
  */
 export function isKnownPublicHost(remoteUrl: string | null): boolean {
   if (!remoteUrl) return false;

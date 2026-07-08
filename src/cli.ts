@@ -2,8 +2,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { ScanError } from "./errors.js";
+import { ScanError, AuthError, SubmitError, NetworkError } from "./errors.js";
 import { executeScanCommand } from "./scan-command.js";
+import { executeSubmitCommand } from "./submit-command.js";
+import { runLogin } from "./login.js";
+import { runLogout } from "./logout.js";
 
 function getToolVersion(): string {
   const pkgUrl = new URL("../package.json", import.meta.url);
@@ -13,6 +16,31 @@ function getToolVersion(): string {
 
 function collect(value: string, previous: string[]): string[] {
   return previous.concat([value]);
+}
+
+/** The domain errors every command may throw — never wraps a raw fetch/fs
+ * error, so this catch can safely print `err.message` without risking a
+ * token or bundle leaking through an unsanitized underlying error. */
+function isCliError(err: unknown): err is Error {
+  return (
+    err instanceof ScanError ||
+    err instanceof AuthError ||
+    err instanceof SubmitError ||
+    err instanceof NetworkError
+  );
+}
+
+async function run(action: () => Promise<void> | void): Promise<void> {
+  try {
+    await action();
+  } catch (err) {
+    if (isCliError(err)) {
+      console.error(`Error: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
+  }
 }
 
 const program = new Command();
@@ -34,21 +62,56 @@ program
     false
   )
   .action(async (options: { repo: string; author: string[]; yes: boolean }) => {
-    try {
-      await executeScanCommand({
+    await run(() =>
+      executeScanCommand({
         repoPath: resolve(options.repo),
         author: options.author,
         yes: options.yes,
         toolVersion: getToolVersion(),
-      });
-    } catch (err) {
-      if (err instanceof ScanError) {
-        console.error(`Error: ${err.message}`);
-        process.exitCode = 1;
-        return;
-      }
-      throw err;
-    }
+      })
+    );
+  });
+
+program
+  .command("login")
+  .description("Authenticate via device flow and store a session token locally.")
+  .action(async () => {
+    await run(() => runLogin());
+  });
+
+program
+  .command("logout")
+  .description("Delete the locally stored session token.")
+  .action(async () => {
+    await run(() => runLogout());
+  });
+
+program
+  .command("submit")
+  .description("Scan, review, and upload a proof bundle. Requires a prior `redential login`.")
+  .option("--repo <path>", "path to the git repository to scan", ".")
+  .option(
+    "--author <email>",
+    "author email that is yours (repeatable); enables non-interactive mode",
+    collect,
+    [] as string[]
+  )
+  .option(
+    "--yes",
+    "confirm 'I am authorized to analyze this repository' non-interactively",
+    false
+  )
+  .option("--confirm-upload", "confirm the upload itself non-interactively (separate from --yes)", false)
+  .action(async (options: { repo: string; author: string[]; yes: boolean; confirmUpload: boolean }) => {
+    await run(() =>
+      executeSubmitCommand({
+        repoPath: resolve(options.repo),
+        author: options.author,
+        yes: options.yes,
+        confirmUpload: options.confirmUpload,
+        toolVersion: getToolVersion(),
+      })
+    );
   });
 
 program.parse();

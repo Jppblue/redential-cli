@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   httpGet: vi.fn(),
   httpsRequest: vi.fn(),
   httpsGet: vi.fn(),
+  fetch: vi.fn(),
 }));
 
 vi.mock("node:http", async (importOriginal) => {
@@ -23,6 +24,10 @@ vi.mock("node:https", async (importOriginal) => {
   const actual = (await importOriginal()) as object;
   return { ...actual, request: mocks.httpsRequest, get: mocks.httpsGet };
 });
+// global fetch isn't a module import, so it can't be vi.mock'd — stub it
+// directly on globalThis for the duration of this suite instead.
+const realFetch = globalThis.fetch;
+globalThis.fetch = mocks.fetch as unknown as typeof fetch;
 
 import { cleanup, commit, createRepo, setRemote } from "../support/fixtures.js";
 import { runScan, listAuthors } from "../../src/scan.js";
@@ -33,6 +38,9 @@ import { readFileSync, readdirSync } from "node:fs";
 const dirs: string[] = [];
 afterEach(() => {
   while (dirs.length > 0) cleanup(dirs.pop()!);
+});
+afterAll(() => {
+  globalThis.fetch = realFetch;
 });
 
 function tempConfigDir(): string {
@@ -68,11 +76,20 @@ describe("zero network calls during scan", () => {
     expect(mocks.httpGet).not.toHaveBeenCalled();
     expect(mocks.httpsRequest).not.toHaveBeenCalled();
     expect(mocks.httpsGet).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
-  it("has no reference to fetch/http/https network APIs anywhere in src/", () => {
+  // Only login.ts and submit.ts are allowed to reach the network (principle
+  // 1: "the only network calls are login (device flow) and submit"), and
+  // only through http-client.ts's fetch wrapper. Every other file in src/ —
+  // including scan's whole dependency graph — must stay clean, and stays an
+  // allowlist (not an enumeration of scan's files) so a new file added to
+  // src/ is network-free by default unless explicitly opted in here.
+  const NETWORK_ALLOWED_FILES = new Set(["http-client.ts", "login.ts", "submit.ts"]);
+
+  it("has no reference to fetch/http/https network APIs outside the allowlisted files", () => {
     const srcUrl = new URL("../../src/", import.meta.url);
-    const files = readdirSync(srcUrl).filter((f) => f.endsWith(".ts"));
+    const files = readdirSync(srcUrl).filter((f) => f.endsWith(".ts") && !NETWORK_ALLOWED_FILES.has(f));
     const networkPattern = /\bfetch\(|node:https?['"]|require\(['"]https?['"]\)/;
     for (const file of files) {
       const contents = readFileSync(new URL(file, srcUrl), "utf8");

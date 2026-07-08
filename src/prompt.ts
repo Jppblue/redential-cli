@@ -69,3 +69,19 @@ export async function promptConfirmAttestation(
     rl.close();
   }
 }
+
+/** Separate confirmation from promptConfirmAttestation — "I'm authorized to
+ * scan" and "upload this specific bundle" are different questions. */
+export async function promptConfirmUpload(streams: PromptStreams = DEFAULT_STREAMS): Promise<boolean> {
+  const rl = createInterface(streams);
+  try {
+    const answer = await questionOrThrowOnClose(
+      rl,
+      "Upload this bundle? (y/n) ",
+      "Input closed before the upload was confirmed."
+    );
+    return answer.trim().toLowerCase().startsWith("y");
+  } finally {
+    rl.close();
+  }
+}

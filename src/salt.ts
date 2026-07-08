@@ -1,9 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-
-const DEFAULT_CONFIG_DIR = join(homedir(), ".config", "redential");
+import { DEFAULT_CONFIG_DIR } from "./config.js";
 
 /**
  * Device-local salt, persisted once per machine (same 0600 pattern as

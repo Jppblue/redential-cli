@@ -10,7 +10,8 @@ technical categories, signed commits, ownership. Never the code itself.
 ```bash
 npx @redential/cli login    # device flow, one time
 npx @redential/cli scan     # analyze — prints EXACTLY what would be uploaded
-npx @redential/cli submit   # upload, after your explicit confirmation
+npx @redential/cli submit   # scan again, review, then upload after your explicit confirmation
+npx @redential/cli logout   # delete the locally stored session
 ```
 
 ## What leaves your machine

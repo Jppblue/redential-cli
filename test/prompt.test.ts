@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Readable, Writable } from "node:stream";
-import { promptAuthors, promptConfirmAttestation } from "../src/prompt.js";
+import { promptAuthors, promptConfirmAttestation, promptConfirmUpload } from "../src/prompt.js";
 import { ScanError } from "../src/scan.js";
 
 // Stdin closed/EOF before an answer (e.g. piped input in a script or CI)
@@ -32,6 +32,12 @@ describe("prompt EOF handling", () => {
         input: endedInput(),
         output: sinkOutput(),
       })
+    ).rejects.toBeInstanceOf(ScanError);
+  });
+
+  it("promptConfirmUpload rejects when input closes before an answer", async () => {
+    await expect(
+      promptConfirmUpload({ input: endedInput(), output: sinkOutput() })
     ).rejects.toBeInstanceOf(ScanError);
   });
 });

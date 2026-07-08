@@ -37,9 +37,10 @@ redential scan --author you@example.com --yes   # non-interactive
 - **Device salt.** `repo_fingerprint` and `author_identity_hashes` are
   salted with a random value generated once and persisted at
   `~/.config/redential/salt` (0600), the same pattern as
-  `credentials.json`. The salt is device-local, not account-anchored (there
-  is no `login` yet in this milestone) — its only job is preventing
-  rainbow-table lookups.
+  `credentials.json` (see [login-submit.md](login-submit.md)). The salt is
+  device-local, not account-anchored — it survives `redential logout` and
+  its only job is preventing rainbow-table lookups, independent of any
+  session.
 - **Empty / unmatched repos fail loudly.** A repository with zero commits,
   or a `--author` that matches no commits, raises an error and exits
   non-zero rather than fabricating a bundle with meaningless dates.

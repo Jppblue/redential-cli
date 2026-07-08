@@ -8,8 +8,8 @@ wrong, not the test.
 
 | Test | Proves |
 |---|---|
-| `test/privacy/zero-network.test.ts` → "never touches http/https across listAuthors, the guardrail check, and runScan" | `node:http`/`node:https` are never invoked while running the full scan path (author enumeration, the public-host guardrail, `runScan`) — verified by mocking both modules and asserting zero calls, not just by inspection. |
-| `test/privacy/zero-network.test.ts` → "has no reference to fetch/http/https network APIs anywhere in src/" | Static backstop: no file under `src/` even mentions `fetch(`, `node:http`, or `node:https`, so the property can't regress silently as new code is added. |
+| `test/privacy/zero-network.test.ts` → "never touches http/https across listAuthors, the guardrail check, and runScan" | `node:http`/`node:https`/global `fetch` are never invoked while running the full scan path (author enumeration, the public-host guardrail, `runScan`) — verified by mocking all three and asserting zero calls, not just by inspection. |
+| `test/privacy/zero-network.test.ts` → "has no reference to fetch/http/https network APIs outside the allowlisted files" | Static backstop: no file under `src/` mentions `fetch(`, `node:http`, or `node:https` **except** the three files principle 1 explicitly permits to (`http-client.ts`, `login.ts`, `submit.ts`) — an allowlist, not an enumeration of scan's files, so a new file added to `src/` is network-free by default unless explicitly opted in. |
 
 ## 2. Explicit
 
@@ -31,10 +31,11 @@ wrong, not the test.
 | Test | Proves |
 |---|---|
 | `test/scan.test.ts` → single-commit / multiple-author cases (implicit) | `runScan` is a pure function of its inputs (repo state + explicit `now`): given the same repository and the same `now`, it returns byte-identical JSON on every call — there is no hidden enrichment step between what a caller inspects and what `submit` would later send, since both would come from calling the same function on the same reviewed bundle. |
+| `test/privacy/submit-guardrail.test.ts` → "the request body equals the exact string logged before the upload confirmation" | Closes the gap noted below: `submit` prints the bundle via the same `buildBundleInteractively` path `scan` uses, then uploads that **exact printed string** (`postRawJson`, never a re-serialization of the parsed object) — proven by asserting the mock server's received request body is `===` the printed line, not just deep-equal after re-parsing. |
 
-_Gap, tracked for the `submit` milestone: once `submit` exists, it must send_
-_the exact bytes `scan` printed rather than re-deriving the bundle, and that_
-_equality needs its own test at that point._
+_Gap closed: `submit` now exists (see [login-submit.md](login-submit.md))_
+_and sends the exact bytes `scan`'s bundle-building path printed, verified_
+_by the test above._
 
 ## 5. NDA-safe by construction
 
@@ -79,15 +80,26 @@ network call, which `scan` never makes). A `github.com` URL without
 embedded credentials usually means a public repo, but the CLI cannot and
 does not claim certainty — so it can only ever inform, never block.
 
-**TODO, tracked for the `submit` milestone:** the only way to actually
-verify "is this remote publicly accessible" is a network request, which is
-inviolable-forbidden inside `scan` but is fine at `submit` time (`submit`
-already makes network calls to Redential). Plan: an anonymous HTTP `HEAD`
-request made directly to the remote URL itself (e.g.
-`https://github.com/<org>/<repo>`) — this request target is the *remote*,
-never Redential's servers, so the remote URL never travels to Redential.
-A 2xx/3xx response is real evidence of public accessibility; a 404/auth
-challenge is real evidence it's private. This replaces the local heuristic
-with an actual check, still without ever sending the remote URL itself
-anywhere except back to the host it already came from. See the `TODO`
-comment in `src/public-remote.ts`.
+**Implemented, `submit` milestone:** `src/submit.ts`'s `checkVisibilityGate`
+is the real, network-backed check described above — an anonymous HTTP
+`HEAD` request made directly to the remote URL itself, never to
+`SITE_URL`. See [login-submit.md](login-submit.md) for the full behavior.
+
+| Test | Proves |
+|---|---|
+| `test/submit.test.ts` → "refuses and never uploads when the visibility gate confirms a public remote" | A confirmed `2xx`/`3xx` HEAD response blocks `submit` before any bundle upload request is made — `server.requests` stays empty. |
+| `test/submit.test.ts` → "proceeds when the visibility gate finds the remote is not publicly reachable" | A `4xx` HEAD response (private/gated) does not block the upload. |
+| `test/privacy/submit-guardrail.test.ts` → "does not call probeFn when the remote URL embeds credentials..." / "...for a self-hosted remote" | The HEAD probe only ever fires for `isKnownPublicHost`-shaped remotes with no embedded credentials or token — it can never turn into an authenticated request the user didn't ask for, and never probes an arbitrary self-hosted URL. |
+| `test/privacy/public-remote-guardrail.test.ts` (existing) | `isKnownPublicHost`/`publicHostWarning` themselves stay pure and local — `checkVisibilityGate` only adds a real check on top when they say "known public host", it doesn't change what `scan` does. |
+
+## Guardrail: no token or bundle content in a thrown error
+
+`login`/`submit` are the first commands with anything worth leaking through
+an error message — a bearer token, or the full bundle. `src/http-client.ts`
+builds every `NetworkError` from the request's host and HTTP status only,
+never from response headers or body.
+
+| Test | Proves |
+|---|---|
+| `test/privacy/submit-guardrail.test.ts` → "a failed upload's error message names the host and status, never the token or bundle" | A `500` from the submit endpoint produces a `NetworkError` whose message contains the status code but neither the stored access token nor any bundle field (`schema_version` as a proxy for "the whole bundle got interpolated in"). |
+| `test/login.test.ts` (all cases, implicit) | `login`'s errors (`AuthError` for denied/expired/timed-out) are static, fixed strings — never built from the device code or any server response field, so there's no path for the code to end up in an error either. |
