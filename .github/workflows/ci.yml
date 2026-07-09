@@ -1,0 +1,39 @@
+name: CI
+
+# Runs on every PR (including from forks) and every push to main. This
+# workflow never references `secrets.*` anywhere below — `pull_request`
+# (not `pull_request_target`) already withholds repository secrets from a
+# fork's PR by default, and not referencing any here means there's nothing
+# for a future edit to leak even if that changed. `permissions: contents:
+# read` below is the same belt-and-suspenders idea for the GITHUB_TOKEN.
+# Publishing lives entirely in release.yml, gated on a `v*` tag instead.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build

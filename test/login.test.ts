@@ -30,6 +30,10 @@ const instantSleep = () => Promise.resolve();
 // without it, the default openBrowser would actually shell out and pop a
 // real browser window/tab for the mocked verification_uri on every test run.
 const noOpen = () => {};
+// Every test that reaches a successful login injects this — without it,
+// the default checkForUpdate would make a real request to the npm registry
+// on every test run. version-check.test.ts covers checkForUpdate itself.
+const noCheckForUpdate = async () => {};
 
 describe("runLogin (device flow against a mocked local server)", () => {
   it("polls until confirmed, then stores a 0600 credentials file scoped to the site", async () => {
@@ -62,7 +66,13 @@ describe("runLogin (device flow against a mocked local server)", () => {
 
     const configDir = tempConfigDir();
     const logs: string[] = [];
-    await runLogin({ configDir, log: (m) => logs.push(m), sleepFn: instantSleep, openFn: noOpen });
+    await runLogin({
+      configDir,
+      log: (m) => logs.push(m),
+      sleepFn: instantSleep,
+      openFn: noOpen,
+      checkForUpdateFn: noCheckForUpdate,
+    });
 
     expect(pollCount).toBe(2);
     expect(logs.some((l) => l.includes("ABCD-1234"))).toBe(true);
@@ -93,7 +103,13 @@ describe("runLogin (device flow against a mocked local server)", () => {
     process.env.REDENTIAL_SITE_URL = server.url;
 
     const configDir = tempConfigDir();
-    await runLogin({ configDir, log: () => {}, sleepFn: instantSleep, openFn: noOpen });
+    await runLogin({
+      configDir,
+      log: () => {},
+      sleepFn: instantSleep,
+      openFn: noOpen,
+      checkForUpdateFn: noCheckForUpdate,
+    });
     expect(pollCount).toBe(2);
   });
 
@@ -177,7 +193,13 @@ describe("runLogin (device flow against a mocked local server)", () => {
 
     const configDir = tempConfigDir();
     const opened: string[] = [];
-    await runLogin({ configDir, log: () => {}, sleepFn: instantSleep, openFn: (url) => opened.push(url) });
+    await runLogin({
+      configDir,
+      log: () => {},
+      sleepFn: instantSleep,
+      openFn: (url) => opened.push(url),
+      checkForUpdateFn: noCheckForUpdate,
+    });
 
     expect(opened).toEqual(["http://example.test/activate"]);
   });
@@ -204,7 +226,36 @@ describe("runLogin (device flow against a mocked local server)", () => {
         openFn: () => {
           throw new Error("no browser available");
         },
+        checkForUpdateFn: noCheckForUpdate,
       })
     ).resolves.toBeUndefined();
+  });
+
+  it("prints an upgrade notice via checkForUpdateFn after a successful login, but never lets it fail login", async () => {
+    const server = await startMockServer((req) => {
+      if (req.url === "/api/cli/device/authorize") {
+        return {
+          status: 200,
+          body: { device_code: "dc-8", user_code: "X", verification_uri: "http://x", expires_in: 600, interval: 0 },
+        };
+      }
+      return { status: 200, body: { access_token: "tok" } };
+    });
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const configDir = tempConfigDir();
+    let called = false;
+    await runLogin({
+      configDir,
+      log: () => {},
+      sleepFn: instantSleep,
+      openFn: noOpen,
+      checkForUpdateFn: async () => {
+        called = true;
+      },
+    });
+
+    expect(called).toBe(true);
   });
 });

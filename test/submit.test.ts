@@ -24,6 +24,12 @@ function tempConfigDir(): string {
   return dir;
 }
 
+// Injected into every test that reaches a successful upload — without it,
+// the default checkForUpdate would make a real request to the npm
+// registry on every test run. version-check.test.ts covers checkForUpdate
+// itself.
+const noCheckForUpdate = async () => {};
+
 function repoWithOneCommit(remote?: string): string {
   const dir = createRepo();
   dirs.push(dir);
@@ -97,6 +103,7 @@ describe("executeSubmitCommand", () => {
       configDir,
       log: (m) => logs.push(m),
       warn: () => {},
+      checkForUpdateFn: noCheckForUpdate,
     });
 
     expect(server.requests).toHaveLength(1);
@@ -186,8 +193,67 @@ describe("executeSubmitCommand", () => {
       log: () => {},
       warn: () => {},
       probeFn: async () => ({ status: 404 }),
+      checkForUpdateFn: noCheckForUpdate,
     });
 
     expect(server.requests).toHaveLength(1);
+  });
+
+  it("calls checkForUpdateFn only after a successful upload, not on abort or refusal", async () => {
+    const server = await startMockServer((req) => {
+      if (req.url === "/api/cli/bundles") return { status: 200, body: { id: "bundle-456" } };
+      return { status: 404, body: {} };
+    });
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "t", site_url: server.url, obtained_at: "now" }, configDir);
+
+    let called = false;
+    await executeSubmitCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      confirmUpload: true,
+      toolVersion: "0.1.0",
+      configDir,
+      log: () => {},
+      warn: () => {},
+      checkForUpdateFn: async () => {
+        called = true;
+      },
+    });
+
+    expect(called).toBe(true);
+  });
+
+  it("does not call checkForUpdateFn when the user declines the upload prompt", async () => {
+    const server = await startMockServer(() => ({ status: 200, body: { id: "should-not-be-called" } }));
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "t", site_url: server.url, obtained_at: "now" }, configDir);
+
+    let called = false;
+    await executeSubmitCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      confirmUpload: false,
+      toolVersion: "0.1.0",
+      configDir,
+      log: () => {},
+      warn: () => {},
+      promptConfirmUploadFn: async () => false,
+      checkForUpdateFn: async () => {
+        called = true;
+      },
+    });
+
+    expect(called).toBe(false);
   });
 });

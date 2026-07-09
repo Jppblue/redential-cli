@@ -15,11 +15,28 @@
     "signatures",
     "taxonomy.json"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jppblue/redential-cli.git"
+  },
+  "homepage": "https://github.com/Jppblue/redential-cli#readme",
+  "bugs": {
+    "url": "https://github.com/Jppblue/redential-cli/issues"
+  },
+  "keywords": [
+    "cli",
+    "git",
+    "credential-verification",
+    "proof-of-work",
+    "developer-portfolio",
+    "privacy"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm test && npm run build"
   },
   "dependencies": {
     "commander": "^12.1.0"

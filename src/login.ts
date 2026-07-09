@@ -3,6 +3,7 @@ import { AuthError } from "./errors.js";
 import { getSiteUrl } from "./config.js";
 import { saveCredentials } from "./credentials.js";
 import { postJson, pollJson } from "./http-client.js";
+import { checkForUpdate } from "./version-check.js";
 
 interface DeviceAuthorization {
   device_code: string;
@@ -35,6 +36,9 @@ export interface LoginOptions {
   sleepFn?: (ms: number) => Promise<void>;
   // Injectable so tests don't spawn a real browser process.
   openFn?: (url: string) => void;
+  // Injectable so tests don't make a real request to the npm registry;
+  // defaults to the real checkForUpdate (src/version-check.ts).
+  checkForUpdateFn?: () => Promise<void>;
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -139,6 +143,10 @@ export async function runLogin(opts: LoginOptions = {}): Promise<void> {
         opts.configDir
       );
       log("Logged in.");
+      // Best-effort only, after the login itself has already fully
+      // succeeded — never allowed to turn a successful login into a
+      // failure (checkForUpdate never throws by contract).
+      await (opts.checkForUpdateFn ?? (() => checkForUpdate({ log })))();
       return;
     }
     switch (result.error) {

@@ -5,6 +5,7 @@ import { readCredentials } from "./credentials.js";
 import { getRemoteUrl } from "./git.js";
 import { checkVisibilityGate, postBundle } from "./submit.js";
 import { promptConfirmUpload } from "./prompt.js";
+import { checkForUpdate } from "./version-check.js";
 
 export type SubmitCommandOptions = BuildBundleOptions & {
   /** Separate from `yes` (authorization-to-scan) on purpose — this is
@@ -15,6 +16,9 @@ export type SubmitCommandOptions = BuildBundleOptions & {
   // Injectable for tests, so the visibility gate doesn't need a real
   // network call to github.com to exercise the blocked/unblocked paths.
   probeFn?: Parameters<typeof checkVisibilityGate>[1];
+  // Injectable so tests don't make a real request to the npm registry;
+  // defaults to the real checkForUpdate (src/version-check.ts).
+  checkForUpdateFn?: () => Promise<void>;
 };
 
 /**
@@ -57,4 +61,9 @@ export async function executeSubmitCommand(opts: SubmitCommandOptions): Promise<
 
   const result = await postBundle(siteUrl, credentials.access_token, bundleJson);
   log(`Uploaded. Bundle id: ${result.id}`);
+
+  // Best-effort only, after the upload itself has already fully succeeded
+  // — never allowed to turn a successful submit into a failure
+  // (checkForUpdate never throws by contract).
+  await (opts.checkForUpdateFn ?? (() => checkForUpdate({ log: warn, currentVersion: opts.toolVersion })))();
 }

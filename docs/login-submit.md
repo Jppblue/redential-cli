@@ -130,6 +130,48 @@ github.com.
   inconclusive result, `submit` falls back to printing the exact same
   `publicHostWarning` message `scan` would have shown, and proceeds.
 
+## Version check (login/submit only — never scan)
+
+After a successful `login` or a successful `submit` upload, the CLI makes
+one best-effort, non-blocking `GET` to the public npm registry
+(`registry.npmjs.org/@redential%2Fcli/latest`) and prints a one-line notice
+if a newer version exists (`src/version-check.ts`). This is the only place
+outside the device flow and the bundle upload that this CLI ever reaches
+the network, so the boundary is worth stating precisely:
+
+- **What's sent:** nothing about you, your machine, or the repository —
+  the request carries no query params, no headers beyond the defaults
+  `fetch` sends, and no body. It's indistinguishable from any anonymous
+  visitor fetching a public npm package's metadata; it is a *download*
+  (checking what exists), not an *upload* (reporting what you did),
+  which is the distinction principle 2 ("Explicit... no telemetry") is
+  actually drawing — the CLI never phones home with usage data,
+  independent of this.
+- **When it runs:** only bolted onto `login` and `submit`, and only after
+  each has already fully completed its own job — a failing or slow
+  registry can never fail or delay the login/upload itself
+  (`checkForUpdate` swallows every error and is timeout-bounded; see the
+  function's own contract in `src/version-check.ts`).
+- **Where it does NOT run — ever:** `scan`. Principle 1 states `scan`
+  makes ZERO network calls, no exceptions, and that rule is inviolable
+  regardless of how harmless a given call looks in isolation — the whole
+  point of `scan` being network-free is that a user can point it at a
+  repository under an NDA, an audit, an air-gapped machine, or just
+  their own paranoia, and *verify* zero network access (`strace`,
+  disabling their network interface, reading `test/privacy/
+  zero-network.test.ts`) without having to trust a judgment call about
+  which outbound calls are "safe." `checkForUpdate` deliberately never
+  references `fetch`/`http`/`https` directly — it goes through
+  `http-client.ts`'s `getJson` — so a plain grep for network APIs
+  couldn't catch it being wired into `scan`'s call graph by mistake.
+  `test/privacy/zero-network.test.ts` encodes the actual rule instead:
+  `version-check.ts` may only ever be imported by `login.ts`/
+  `submit-command.ts`; that test fails if it's ever imported from
+  `scan.ts`, `scan-command.ts`, `build-bundle.ts`, or anywhere else in
+  scan's dependency graph, regardless of whether the import itself
+  references a network API literally. This was reviewed explicitly as a
+  sensitive-zone change before being merged.
+
 ## Error handling
 
 Every command-level error is one of `ScanError` / `AuthError` /

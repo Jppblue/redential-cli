@@ -96,4 +96,30 @@ describe("zero network calls during scan", () => {
       expect(contents, `${file} should not reference a network API`).not.toMatch(networkPattern);
     }
   });
+
+  // version-check.ts's checkForUpdate (the post-success "a newer version
+  // exists" notice — see docs/login-submit.md's "Version check" section)
+  // deliberately never references fetch/http/https directly: it goes
+  // through http-client.ts's getJson, so the static check immediately
+  // above this one — matching only direct network-API references — can't
+  // catch it being wired into scan's call graph. This test encodes the
+  // actual rule directly: version-check.ts may only ever be imported by
+  // login.ts/submit-command.ts, the two commands that already touch the
+  // network. If it's ever imported from scan.ts, scan-command.ts,
+  // build-bundle.ts, or anywhere else in scan's dependency graph, this
+  // fails — regardless of whether that import happens to reference fetch
+  // literally.
+  const VERSION_CHECK_ALLOWED_FILES = new Set(["login.ts", "submit-command.ts"]);
+
+  it("version-check.ts (the post-success update notice) is only ever imported by login.ts/submit-command.ts — never scan's call graph", () => {
+    const srcUrl = new URL("../../src/", import.meta.url);
+    const files = readdirSync(srcUrl).filter(
+      (f) => f.endsWith(".ts") && f !== "version-check.ts" && !VERSION_CHECK_ALLOWED_FILES.has(f)
+    );
+    const importPattern = /version-check(\.js)?['"]/;
+    for (const file of files) {
+      const contents = readFileSync(new URL(file, srcUrl), "utf8");
+      expect(contents, `${file} should not import version-check.ts`).not.toMatch(importPattern);
+    }
+  });
 });

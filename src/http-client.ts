@@ -114,3 +114,20 @@ export async function headRequest(url: string, timeoutMs: number): Promise<{ sta
     return null;
   }
 }
+
+/**
+ * Anonymous GET with a timeout, used only by version-check.ts's best-effort
+ * npm-registry freshness check. Returns null (never throws) on any failure —
+ * network error, timeout, non-2xx status, or a body that isn't valid JSON —
+ * so a broken or offline registry can never delay or fail the login/submit
+ * command this is attached to.
+ */
+export async function getJson<T>(url: string, timeoutMs: number): Promise<T | null> {
+  try {
+    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}

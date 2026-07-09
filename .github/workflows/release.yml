@@ -1,0 +1,45 @@
+name: Release
+
+# Publishes to npm. Triggers ONLY on a pushed tag matching v* — never on
+# pull_request, never on a branch push. This is deliberate: pull_request
+# workflows can run against a fork's untrusted code, and this is the one
+# workflow in this repo that touches NPM_TOKEN — see docs/releasing.md.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  # id-token: write is what lets `npm publish --provenance` mint a
+  # Sigstore-signed attestation tying this tarball to this exact commit,
+  # workflow run, and trigger — see docs/releasing.md's "Verifying
+  # provenance" section.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          # provenance requires publishing through a registry that supports
+          # it; the default registry-url is npmjs.org, set explicitly here
+          # so this doesn't silently depend on setup-node's default.
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm test
+
+      - run: npx tsc --noEmit
+
+      - run: npm run build
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

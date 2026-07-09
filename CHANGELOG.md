@@ -7,7 +7,47 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-09
+
 ### Added
+- **Automated release pipeline.** `.github/workflows/release.yml` publishes
+  to npm only on a pushed `v*` tag (`npm ci && npm test && tsc --noEmit &&
+  npm run build && npm publish --provenance --access public`, authenticated
+  via the `NPM_TOKEN` secret) — never on `pull_request`, so a fork's PR can
+  never see the token. `.github/workflows/ci.yml` runs `npm ci`, typecheck,
+  test, and build on every PR (including from forks) and every push to
+  `main`; it references no secrets at all. `package.json` hardened for
+  publication: `repository`/`homepage`/`bugs` fields (required for npm's
+  provenance UI to link a published version back to its source commit),
+  `keywords`, and a `prepublishOnly` script (`npm test && npm run build`)
+  as a last-line guard against a manual `npm publish` of stale/broken
+  `dist/` output. `files` (already `["dist", "signatures",
+  "taxonomy.json"]`) re-verified correct via `npm pack --dry-run` —
+  `signatures/`/`taxonomy.json` are genuinely required at runtime for skill
+  detection, not scope creep beyond `dist`. Added the Apache-2.0 `LICENSE`
+  file at the repo root (canonical, unmodified text — the form GitHub's
+  license detector expects). See [docs/releasing.md](docs/releasing.md)
+  for the full release process, provenance verification, and what to do if
+  a release fails mid-way.
+- **Update notice — `login`/`submit` only, never `scan`.** After a
+  successful `login` or a successful `submit` upload, a best-effort,
+  non-blocking check against the public npm registry prints a one-line
+  notice if a newer version of the CLI is available (`src/version-check.ts`,
+  via a new `getJson` helper in `src/http-client.ts`). Fast-timeout and
+  swallows every error by contract: it can never fail or delay the command
+  it's attached to. Deliberately never wired into `scan-command.ts` —
+  principle 1 ("`scan` makes ZERO network calls") is inviolable regardless
+  of how harmless a given outbound call looks in isolation, so the notice
+  only ever rides on `login`/`submit`, which already touch the network.
+  `checkForUpdate` never references `fetch`/`http`/`https` directly (it
+  goes through `getJson`), so `test/privacy/zero-network.test.ts`'s
+  existing static allowlist alone couldn't have caught it being wired into
+  `scan` by mistake — a review pass on this milestone flagged exactly that
+  gap, so a new dedicated test was added asserting `version-check.ts` is
+  only ever imported by `login.ts`/`submit-command.ts`, full stop. See
+  [docs/login-submit.md](docs/login-submit.md)'s "Version check" section
+  for the full boundary reasoning; reviewed as a sensitive-zone change
+  before merging.
 - **`scan`'s "wrapped" terminal summary.** When stdout is an interactive
   terminal, `scan` now prints a human-readable summary — total commits and
   span, an hour-of-day sparkline and weekday bar chart, top languages and
