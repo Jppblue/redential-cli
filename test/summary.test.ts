@@ -56,6 +56,25 @@ describe("formatSummary", () => {
     expect(text).toContain("Nothing left your machine. Verify: github.com/Jppblue/redential-cli");
   });
 
+  it("opens with a divider and ends with the closing verification line — it's meant to be printed after the JSON, as the last thing left on screen", () => {
+    const lines = formatSummary(baseBundle()).split("\n");
+    expect(stripAnsi(lines[0])).toMatch(/^\s*─+\s*$/);
+    const lastLine = stripAnsi(lines[lines.length - 1]);
+    expect(lastLine).toContain("Nothing left your machine. Verify: github.com/Jppblue/redential-cli");
+  });
+
+  it("shows the signing tip when signed ratio is 0%", () => {
+    const text = stripAnsi(formatSummary(baseBundle({ signed: { count: 0, ratio: 0 } })));
+    expect(text).toContain(
+      "Tip: sign your commits (git config commit.gpgsign true) — signed history is the strongest anchor for your credential."
+    );
+  });
+
+  it("omits the signing tip when signed ratio is above 0%", () => {
+    const text = stripAnsi(formatSummary(baseBundle()));
+    expect(text).not.toContain("Tip: sign your commits");
+  });
+
   it("renders a 24-wide hour-of-day sparkline and all 7 weekday labels", () => {
     const text = stripAnsi(formatSummary(baseBundle()));
     for (const day of ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]) {

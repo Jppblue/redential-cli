@@ -119,6 +119,12 @@ function skillsSection(bundle: Bundle): string[] {
 export function formatSummary(bundle: Bundle): string {
   const lines: string[] = [];
 
+  // Printed after the JSON (scan-command.ts) so this is the last thing on
+  // screen when the command ends — the divider marks where the JSON above
+  // ends and the human-readable summary begins.
+  lines.push(`  ${GRAY}${"─".repeat(WIDTH)}${RESET}`);
+  lines.push("");
+
   const title = "YOUR PRIVATE REPO, WRAPPED";
   const pad = Math.max(0, Math.floor((WIDTH - title.length) / 2));
   lines.push(`  ${CYAN}${"╔" + "═".repeat(WIDTH) + "╗"}${RESET}`);
@@ -183,13 +189,16 @@ export function formatSummary(bundle: Bundle): string {
   lines.push(
     `  ${BOLD}Signed commits${RESET}  ${YELLOW}${pct(bundle.signed.ratio)}${RESET} of your commits are cryptographically signed`
   );
+  if (bundle.signed.ratio === 0) {
+    lines.push(
+      `  ${DIM}Tip: sign your commits (git config commit.gpgsign true) — signed history is the strongest anchor for your credential.${RESET}`
+    );
+  }
   lines.push("");
 
   lines.push(
     `  ${DIM}Nothing left your machine. Verify: github.com/Jppblue/redential-cli${RESET}`
   );
-  lines.push("");
-  lines.push(`  ${GRAY}${"─".repeat(WIDTH)}${RESET}`);
 
   return lines.join("\n");
 }

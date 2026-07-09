@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanup, commit, createRepo } from "./support/fixtures.js";
+import { cleanup, commit, createRepo, setupSshSigning } from "./support/fixtures.js";
 import { validateAgainstSchema } from "./support/schema-validate.js";
 import { executeScanCommand } from "../src/scan-command.js";
 
@@ -68,7 +68,7 @@ describe("executeScanCommand", () => {
     expect(() => JSON.parse(logs[0])).not.toThrow();
   });
 
-  it("prepends the human-readable summary before the JSON when isTTY is true", async () => {
+  it("prints the JSON first, then appends the human-readable summary when isTTY is true", async () => {
     const dir = repoWithOneCommit();
     const logs: string[] = [];
     await executeScanCommand({
@@ -82,10 +82,58 @@ describe("executeScanCommand", () => {
     });
 
     expect(logs).toHaveLength(2);
-    expect(logs[0]).toContain("YOUR PRIVATE REPO, WRAPPED");
-    expect(logs[0]).toContain("Nothing left your machine. Verify: github.com/Jppblue/redential-cli");
-    const bundle = JSON.parse(logs[1]);
+    const bundle = JSON.parse(logs[0]);
     expect(validateAgainstSchema(schema, bundle)).toEqual([]);
+    expect(logs[1]).toContain("YOUR PRIVATE REPO, WRAPPED");
+    expect(logs[1]).toContain("Nothing left your machine. Verify: github.com/Jppblue/redential-cli");
+    // The summary is the LAST thing logged — it's what's left on screen
+    // once the JSON above it has scrolled up.
+    const lastLineOfLastLog = logs[1].split("\n").filter(Boolean).at(-1);
+    expect(lastLineOfLastLog).toContain("Nothing left your machine");
+  });
+
+  it("shows the signing tip in the summary footer when signed ratio is 0%", async () => {
+    const dir = repoWithOneCommit(); // unsigned commit -> signed.ratio === 0
+    const logs: string[] = [];
+    await executeScanCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      toolVersion: "test",
+      configDir: tempConfigDir(),
+      log: (m) => logs.push(m),
+      isTTY: true,
+    });
+
+    expect(logs[1]).toContain(
+      "Tip: sign your commits (git config commit.gpgsign true) — signed history is the strongest anchor for your credential."
+    );
+  });
+
+  it("omits the signing tip when at least one commit is signed", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    setupSshSigning(dir, "you@example.com");
+    commit(dir, {
+      message: "x",
+      authorName: "You",
+      authorEmail: "you@example.com",
+      files: { "a.ts": "console.log(1)\n" },
+      sign: true,
+    });
+
+    const logs: string[] = [];
+    await executeScanCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      toolVersion: "test",
+      configDir: tempConfigDir(),
+      log: (m) => logs.push(m),
+      isTTY: true,
+    });
+
+    expect(logs[1]).not.toContain("Tip: sign your commits");
   });
 
   it("--json forces JSON-only output even when isTTY is true", async () => {
@@ -141,6 +189,6 @@ describe("executeScanCommand", () => {
       delete b.attestation.confirmed_at;
       return b;
     };
-    expect(stripVolatile(ttyLogs[1])).toEqual(stripVolatile(nonTtyLogs[0]));
+    expect(stripVolatile(ttyLogs[0])).toEqual(stripVolatile(nonTtyLogs[0]));
   });
 });

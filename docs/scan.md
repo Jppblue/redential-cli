@@ -40,15 +40,25 @@ redential scan --repo <path> --json       # force JSON-only, even in a terminal
 
 ## The "wrapped" summary
 
-When stdout is an interactive terminal, `scan` prints a human-readable
-summary — total commits and span, an hour-of-day and weekday cadence, top
-languages and categories, detected skills, ownership and signed-commit
-ratios — **before** the JSON, under a divider. It's rendered with ANSI
-colors and box-drawing characters only (no new dependency), and is derived
-entirely from the bundle `scan` already computed: no new data collection,
-no network, nothing beyond what's already in the JSON below it.
+When stdout is an interactive terminal, `scan` prints the full JSON bundle
+first (exactly as always), then a human-readable summary **after** it —
+total commits and span, an hour-of-day and weekday cadence, top languages
+and categories, detected skills, ownership and signed-commit ratios —
+under a divider. It's printed last on purpose: the JSON scrolls up, and
+the summary is what's left on screen once the command finishes. It's
+rendered with ANSI colors and box-drawing characters only (no new
+dependency), and is derived entirely from the bundle `scan` already
+computed: no new data collection, no network, nothing beyond what's
+already in the JSON above it.
 
 ```
+{
+  "schema_version": "1.0.0",
+  ...
+}
+
+  ────────────────────────────────────────────────────────────
+
   ╔════════════════════════════════════════════════════════════╗
   ║                 YOUR PRIVATE REPO, WRAPPED                 ║
   ╚════════════════════════════════════════════════════════════╝
@@ -76,11 +86,13 @@ no network, nothing beyond what's already in the JSON below it.
   Signed commits  45% of your commits are cryptographically signed
 
   Nothing left your machine. Verify: github.com/Jppblue/redential-cli
+```
 
-  ────────────────────────────────────────────────────────────
-{
-  "schema_version": "1.0.0",
-  ...
+If your signed-commit ratio is 0%, one more line appears right under it:
+
+```
+  Signed commits  0% of your commits are cryptographically signed
+  Tip: sign your commits (git config commit.gpgsign true) — signed history is the strongest anchor for your credential.
 ```
 
 This only happens on a real TTY. `scan | jq` (or any redirected/piped
