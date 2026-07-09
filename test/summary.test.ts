@@ -56,8 +56,8 @@ describe("formatSummary", () => {
     expect(text).toContain("Nothing left your machine. Verify: github.com/Jppblue/redential-cli");
   });
 
-  it("opens with a divider and ends with the closing verification line — it's meant to be printed after the JSON, as the last thing left on screen", () => {
-    const lines = formatSummary(baseBundle()).split("\n");
+  it("opens with a divider and ends with the closing verification line when there's no next-step hint to show (session + already submitted identical)", () => {
+    const lines = formatSummary(baseBundle(), { hasSession: true, alreadySubmittedIdentical: true }).split("\n");
     expect(stripAnsi(lines[0])).toMatch(/^\s*─+\s*$/);
     const lastLine = stripAnsi(lines[lines.length - 1]);
     expect(lastLine).toContain("Nothing left your machine. Verify: github.com/Jppblue/redential-cli");
@@ -161,6 +161,55 @@ describe("formatSummary", () => {
     // eslint-disable-next-line no-control-regex
     expect(text).toMatch(/\x1b\[[0-9;]*m/);
     expect(text).toContain("╔");
+  });
+
+  describe("closing next-step hint — three states", () => {
+    const CTA_HEADER = "Want this on a public, verifiable profile?";
+
+    it("no session (hasSession omitted/false): shows the login+submit CTA", () => {
+      const text = stripAnsi(formatSummary(baseBundle()));
+      expect(text).toContain(CTA_HEADER);
+      expect(text).toContain("→ redential login && redential submit");
+      const lastLine = text.split("\n").filter(Boolean).at(-1);
+      expect(lastLine).toContain("redential login && redential submit");
+    });
+
+    it("session, not yet submitted (or unknown): shows the submit-only CTA, without a login command", () => {
+      const text = stripAnsi(formatSummary(baseBundle(), { hasSession: true }));
+      expect(text).toContain(CTA_HEADER);
+      expect(text).toContain("→ redential submit");
+      expect(text).not.toContain("redential login");
+    });
+
+    it("session, not yet submitted, explicit alreadySubmittedIdentical: false: same as above", () => {
+      const text = stripAnsi(
+        formatSummary(baseBundle(), { hasSession: true, alreadySubmittedIdentical: false })
+      );
+      expect(text).toContain(CTA_HEADER);
+      expect(text).toContain("→ redential submit");
+      expect(text).not.toContain("redential login");
+    });
+
+    it("session AND already submitted identical: shows no next-step hint at all", () => {
+      const text = stripAnsi(
+        formatSummary(baseBundle(), { hasSession: true, alreadySubmittedIdentical: true })
+      );
+      expect(text).not.toContain(CTA_HEADER);
+      expect(text).not.toContain("redential submit");
+      expect(text).not.toContain("redential login");
+    });
+
+    it("alreadySubmittedIdentical alone, without hasSession, is treated as no session (safe default)", () => {
+      const text = stripAnsi(formatSummary(baseBundle(), { alreadySubmittedIdentical: true }));
+      expect(text).toContain("→ redential login && redential submit");
+    });
+
+    it("plain mode renders the CTA with an ASCII arrow (\"->\"), still pure printable ASCII", () => {
+      const text = formatSummary(baseBundle(), { plain: true, hasSession: true });
+      expect(text).toContain("-> redential submit");
+      // eslint-disable-next-line no-control-regex
+      expect(text).toMatch(/^[\x20-\x7e\n]*$/);
+    });
   });
 });
 

@@ -6,6 +6,7 @@ import { getRemoteUrl } from "./git.js";
 import { checkVisibilityGate, postBundle } from "./submit.js";
 import { promptConfirmUpload } from "./prompt.js";
 import { checkForUpdate } from "./version-check.js";
+import { bundleContentHash, saveLastSubmission } from "./submission-record.js";
 
 export type SubmitCommandOptions = BuildBundleOptions & {
   /** Separate from `yes` (authorization-to-scan) on purpose — this is
@@ -61,6 +62,17 @@ export async function executeSubmitCommand(opts: SubmitCommandOptions): Promise<
 
   const result = await postBundle(siteUrl, credentials.access_token, bundleJson);
   log(`Uploaded. Bundle id: ${result.id}`);
+
+  // Local-only bookkeeping so a future `scan`'s wrapped summary can tell
+  // "already uploaded, nothing new to submit" from "not submitted yet" —
+  // see submission-record.ts. Never sent anywhere; best-effort in spirit
+  // but not wrapped in try/catch like checkForUpdate below, since a
+  // failure here (e.g. an unwritable config dir) would be a real local
+  // problem worth surfacing, not a network blip to swallow.
+  saveLastSubmission(
+    { site_url: siteUrl, bundle_hash: bundleContentHash(bundle), submitted_at: new Date().toISOString() },
+    opts.configDir
+  );
 
   // Best-effort only, after the upload itself has already fully succeeded
   // — never allowed to turn a successful submit into a failure

@@ -98,6 +98,9 @@ how it's drawn.
   Signed commits  45% of your commits are cryptographically signed
 
   Nothing left your machine. Verify: github.com/Jppblue/redential-cli
+
+  Want this on a public, verifiable profile?
+  → redential login && redential submit
 ```
 
 If your signed-commit ratio is 0%, one more line appears right under it:
@@ -106,6 +109,43 @@ If your signed-commit ratio is 0%, one more line appears right under it:
   Signed commits  0% of your commits are cryptographically signed
   Tip: sign your commits (git config commit.gpgsign true) — signed history is the strongest anchor for your credential.
 ```
+
+### Closing next-step hint
+
+Below the "Nothing left your machine" line, the summary closes with a
+next-step hint in one of three states — a plain local-state check
+(`src/scan-command.ts`'s `nextStepsState`), never a network call:
+
+1. **No stored session** (never logged in, or the stored session is for a
+   different `SITE_URL`):
+   ```
+     Want this on a public, verifiable profile?
+     → redential login && redential submit
+   ```
+2. **Stored session, but this exact bundle hasn't been uploaded yet**
+   (nothing recorded locally yet, or the recorded hash doesn't match this
+   scan's content — e.g. new commits since the last submit):
+   ```
+     Want this on a public, verifiable profile?
+     → redential submit
+   ```
+3. **Stored session AND this exact bundle content was already uploaded**:
+   no hint at all — re-submitting would send nothing new.
+
+"This exact bundle" is decided by `bundleContentHash`
+(`src/submission-record.ts`): a local, unsalted sha256 over the bundle with
+the fields derived purely from wall-clock time stripped first
+(`created_at`, `attestation.confirmed_at`, `repo.age_days`) — otherwise a
+re-scan a moment (or a day) later would never match an otherwise-unchanged
+repo. Everything else participates, including `tool_version` and
+`detected_skills`: a CLI upgrade can genuinely change what the next
+`submit` would upload, so it's deliberately never treated as still
+identical. `redential submit` records this hash locally
+(`<config dir>/last-submission.json`, alongside `credentials.json` — see
+[login-submit.md](login-submit.md#where-the-token-lives)) right after a
+successful upload; it's not a secret (just a hash of content you already
+reviewed and already chose to upload), so unlike `credentials.json` it
+isn't written with restricted file permissions.
 
 This only happens on a real TTY. `scan | jq` (or any redirected/piped
 stdout) prints **only** the raw JSON, byte-identical to before this

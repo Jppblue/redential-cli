@@ -90,7 +90,19 @@ CLI configures or verifies itself.
 
 `logout` deletes this file. It never touches the device salt (`salt`,
 sibling file in the same directory) — the salt is device-local and
-unrelated to your session.
+unrelated to your session. It also never touches `last-submission.json`
+(below): losing your session doesn't change what was actually uploaded.
+
+**`last-submission.json`**, same directory. Written by `submit`
+immediately after a successful upload: `{site_url, bundle_hash,
+submitted_at}` — a local, unsalted sha256 of the uploaded bundle's content
+(see `src/submission-record.ts`'s `bundleContentHash`), never the bundle
+itself. Its only purpose is letting a later `scan`'s wrapped summary tell
+"already uploaded, nothing new to submit" from "not submitted yet" (see
+[docs/scan.md](scan.md#closing-next-step-hint)) — it's read-only bookkeeping,
+never sent anywhere, and unlike `credentials.json`/`salt` it isn't written
+with restricted file permissions, since it isn't a secret: just a hash of
+content you already reviewed and already chose to upload.
 
 ## `submit`: review, then upload
 
@@ -120,6 +132,11 @@ selection, same authorization-confirmation prompt, same `runScan`. It then:
    `{id}`. Only the `id` is ever printed back — never the full response
    body, so a change on the server side can't accidentally start echoing
    sensitive content into the terminal.
+6. Records the upload locally (`last-submission.json`, above) — not part
+   of what's sent, just local bookkeeping for a later `scan`'s next-step
+   hint. Unlike the version-check notice below, this is not best-effort:
+   a failure here (e.g. an unwritable config dir) surfaces as a real
+   error, since silently swallowing it would leave the CTA wrong.
 
 ## The remote-visibility gate (submit-only)
 

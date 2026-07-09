@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { cleanup, commit, createRepo, setupSshSigning } from "./support/fixtures.js";
 import { validateAgainstSchema } from "./support/schema-validate.js";
 import { executeScanCommand } from "../src/scan-command.js";
+import { saveCredentials } from "../src/credentials.js";
+import { bundleContentHash, saveLastSubmission } from "../src/submission-record.js";
+import { getSiteUrl } from "../src/config.js";
 
 const schema = JSON.parse(
   readFileSync(new URL("../schema/bundle.v1.json", import.meta.url), "utf8")
@@ -70,13 +73,36 @@ describe("executeScanCommand", () => {
 
   it("prints the JSON first, then appends the human-readable summary when isTTY is true", async () => {
     const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+
+    // Session + already-submitted-identical, so the next-step hint (its own
+    // dedicated test block below) doesn't participate in this ordering
+    // assertion — the verification line is the true last line only in that
+    // state; otherwise the CTA follows it.
+    const first: string[] = [];
+    await executeScanCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      toolVersion: "test",
+      configDir,
+      log: (m) => first.push(m),
+      isTTY: false,
+    });
+    const siteUrl = getSiteUrl();
+    saveCredentials({ access_token: "t", site_url: siteUrl, obtained_at: "now" }, configDir);
+    saveLastSubmission(
+      { site_url: siteUrl, bundle_hash: bundleContentHash(JSON.parse(first[0])), submitted_at: "now" },
+      configDir
+    );
+
     const logs: string[] = [];
     await executeScanCommand({
       repoPath: dir,
       author: ["you@example.com"],
       yes: true,
       toolVersion: "test",
-      configDir: tempConfigDir(),
+      configDir,
       log: (m) => logs.push(m),
       isTTY: true,
     });
@@ -90,6 +116,166 @@ describe("executeScanCommand", () => {
     // once the JSON above it has scrolled up.
     const lastLineOfLastLog = logs[1].split("\n").filter(Boolean).at(-1);
     expect(lastLineOfLastLog).toContain("Nothing left your machine");
+  });
+
+  describe("closing next-step hint — three states, end to end", () => {
+    it("no stored session: shows the login+submit CTA", async () => {
+      const dir = repoWithOneCommit();
+      const logs: string[] = [];
+      await executeScanCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        toolVersion: "test",
+        configDir: tempConfigDir(),
+        log: (m) => logs.push(m),
+        isTTY: true,
+      });
+
+      expect(logs[1]).toContain("Want this on a public, verifiable profile?");
+      expect(logs[1]).toContain("redential login && redential submit");
+    });
+
+    it("stored session, nothing submitted yet: shows the submit-only CTA", async () => {
+      const dir = repoWithOneCommit();
+      const configDir = tempConfigDir();
+      saveCredentials({ access_token: "t", site_url: getSiteUrl(), obtained_at: "now" }, configDir);
+
+      const logs: string[] = [];
+      await executeScanCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        toolVersion: "test",
+        configDir,
+        log: (m) => logs.push(m),
+        isTTY: true,
+      });
+
+      expect(logs[1]).toContain("Want this on a public, verifiable profile?");
+      expect(logs[1]).toContain("redential submit");
+      expect(logs[1]).not.toContain("redential login");
+    });
+
+    it("stored session, but the last submission was for a DIFFERENT site: treated as not-yet-submitted (submit-only CTA)", async () => {
+      const dir = repoWithOneCommit();
+      const configDir = tempConfigDir();
+      const siteUrl = getSiteUrl();
+      saveCredentials({ access_token: "t", site_url: siteUrl, obtained_at: "now" }, configDir);
+
+      const first: string[] = [];
+      await executeScanCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        toolVersion: "test",
+        configDir,
+        log: (m) => first.push(m),
+        isTTY: false,
+      });
+      saveLastSubmission(
+        {
+          site_url: "https://a-different-site.example",
+          bundle_hash: bundleContentHash(JSON.parse(first[0])),
+          submitted_at: "now",
+        },
+        configDir
+      );
+
+      const logs: string[] = [];
+      await executeScanCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        toolVersion: "test",
+        configDir,
+        log: (m) => logs.push(m),
+        isTTY: true,
+      });
+
+      expect(logs[1]).toContain("redential submit");
+      expect(logs[1]).not.toContain("redential login");
+    });
+
+    it("stored session, this exact bundle already submitted: shows no next-step hint at all", async () => {
+      const dir = repoWithOneCommit();
+      const configDir = tempConfigDir();
+      const siteUrl = getSiteUrl();
+      saveCredentials({ access_token: "t", site_url: siteUrl, obtained_at: "now" }, configDir);
+
+      const first: string[] = [];
+      await executeScanCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        toolVersion: "test",
+        configDir,
+        log: (m) => first.push(m),
+        isTTY: false,
+      });
+      saveLastSubmission(
+        { site_url: siteUrl, bundle_hash: bundleContentHash(JSON.parse(first[0])), submitted_at: "now" },
+        configDir
+      );
+
+      const logs: string[] = [];
+      await executeScanCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        toolVersion: "test",
+        configDir,
+        log: (m) => logs.push(m),
+        isTTY: true,
+      });
+
+      expect(logs[1]).not.toContain("Want this on a public, verifiable profile?");
+      expect(logs[1]).not.toContain("redential submit");
+      expect(logs[1]).not.toContain("redential login");
+    });
+
+    it("a new commit after submitting changes the bundle content: the CTA comes back", async () => {
+      const dir = repoWithOneCommit();
+      const configDir = tempConfigDir();
+      const siteUrl = getSiteUrl();
+      saveCredentials({ access_token: "t", site_url: siteUrl, obtained_at: "now" }, configDir);
+
+      const first: string[] = [];
+      await executeScanCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        toolVersion: "test",
+        configDir,
+        log: (m) => first.push(m),
+        isTTY: false,
+      });
+      saveLastSubmission(
+        { site_url: siteUrl, bundle_hash: bundleContentHash(JSON.parse(first[0])), submitted_at: "now" },
+        configDir
+      );
+
+      commit(dir, {
+        message: "y",
+        authorName: "You",
+        authorEmail: "you@example.com",
+        files: { "b.ts": "console.log(2)\n" },
+      });
+
+      const logs: string[] = [];
+      await executeScanCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        toolVersion: "test",
+        configDir,
+        log: (m) => logs.push(m),
+        isTTY: true,
+      });
+
+      expect(logs[1]).toContain("redential submit");
+      expect(logs[1]).not.toContain("redential login");
+    });
   });
 
   it("shows the signing tip in the summary footer when signed ratio is 0%", async () => {

@@ -2,8 +2,13 @@ import type { Bundle } from "./types.js";
 
 /**
  * Renders a human-facing "wrapped" summary of an already-computed bundle for
- * TTY stdout. Pure formatting only — every value comes from `Bundle`, no new
- * data collection, no network. See `docs/scan.md`.
+ * TTY stdout. Every value describing the REPO comes from `Bundle` alone — no
+ * new data collection, no network, no re-reading git. The closing next-step
+ * hint is the one exception: it takes two plain booleans describing local
+ * CLI session/submission state (never repo data, never derived from
+ * anything besides the CLI's own config dir — see scan-command.ts's
+ * `nextStepsState`), so this function stays a pure, fully unit-testable
+ * function of its explicit inputs either way. See `docs/scan.md`.
  */
 
 const WIDTH = 60;
@@ -29,6 +34,7 @@ interface Theme {
     boxBL: string;
     boxBR: string;
     divider: string;
+    arrow: string;
   };
 }
 
@@ -57,6 +63,7 @@ const RICH_THEME: Theme = {
     boxBL: "╚",
     boxBR: "╝",
     divider: "─",
+    arrow: "→",
   },
 };
 
@@ -84,6 +91,7 @@ const PLAIN_THEME: Theme = {
     boxBL: "+",
     boxBR: "+",
     divider: "-",
+    arrow: "->",
   },
 };
 
@@ -214,6 +222,18 @@ function skillsSection(bundle: Bundle, theme: Theme): string[] {
 export interface FormatSummaryOptions {
   /** True to render the ASCII/no-color fallback (see `shouldUsePlainOutput`). */
   plain?: boolean;
+  /**
+   * Local CLI state for the closing next-step hint — never repo data.
+   * `false`/omitted is always the safe default (never claims a session or
+   * a prior submission that isn't actually known to exist):
+   * - No session → "redential login && redential submit".
+   * - Session, not yet submitted (or `alreadySubmittedIdentical` omitted)
+   *   → "redential submit" only.
+   * - Session AND this exact bundle content was already uploaded → no
+   *   hint at all; re-submitting would send nothing new.
+   */
+  hasSession?: boolean;
+  alreadySubmittedIdentical?: boolean;
 }
 
 export function formatSummary(bundle: Bundle, opts: FormatSummaryOptions = {}): string {
@@ -308,6 +328,20 @@ export function formatSummary(bundle: Bundle, opts: FormatSummaryOptions = {}): 
   lines.push(
     `  ${colors.DIM}Nothing left your machine. Verify: github.com/Jppblue/redential-cli${colors.RESET}`
   );
+
+  // Three states, in order — see FormatSummaryOptions' own doc comment:
+  // no session -> login+submit; session but not yet submitted -> submit
+  // only; session AND already submitted this exact content -> nothing,
+  // since re-submitting would upload nothing new.
+  if (!opts.hasSession) {
+    lines.push("");
+    lines.push(`  ${colors.BOLD}Want this on a public, verifiable profile?${colors.RESET}`);
+    lines.push(`  ${chars.arrow} redential login && redential submit`);
+  } else if (!opts.alreadySubmittedIdentical) {
+    lines.push("");
+    lines.push(`  ${colors.BOLD}Want this on a public, verifiable profile?${colors.RESET}`);
+    lines.push(`  ${chars.arrow} redential submit`);
+  }
 
   const text = lines.join("\n");
   // Prose copy above uses em dashes for typographic style — harmless on

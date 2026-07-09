@@ -8,6 +8,24 @@ always bump at least minor; breaking schema changes bump major.
 ## [Unreleased]
 
 ### Added
+- **Closing next-step hint on the wrapped summary.** `scan`'s TTY-only
+  "wrapped" summary now ends with a next-step CTA after the "Nothing left
+  your machine" line, in one of three states: no stored session shows
+  `redential login && redential submit`; a stored session with this exact
+  bundle not yet uploaded shows `redential submit` only; a stored session
+  with this exact bundle already uploaded shows nothing (re-submitting
+  would send nothing new). "Already uploaded" is decided locally by a new
+  `src/submission-record.ts` (`bundleContentHash` — a local, unsalted
+  sha256 over the bundle with wall-clock-derived fields stripped —  plus
+  `last-submission.json`, written by `submit` right after a successful
+  upload, alongside `credentials.json`). See
+  [docs/scan.md](docs/scan.md#closing-next-step-hint) and
+  [docs/login-submit.md](docs/login-submit.md#where-the-token-lives). No
+  schema change — the bundle payload itself is untouched, this is local
+  CLI state only.
+- Strengthened `submit`'s existing "not logged in" behavior with a test
+  asserting the exact friendly message (`AuthError("Not logged in. Run
+  \`redential login\` first.")`, no stack trace) rather than just its type.
 - **Windows support, verified by CI.** `.github/workflows/ci.yml` now runs
   the full test suite on a matrix of `ubuntu-latest`/`macos-latest`/
   `windows-latest` × Node 20/22 (6 cells, `fail-fast: false`). Fixes and

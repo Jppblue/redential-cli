@@ -90,6 +90,9 @@ human-readable summary underneath it:
   Signed commits  45% of your commits are cryptographically signed
 
   Nothing left your machine. Verify: github.com/Jppblue/redential-cli
+
+  Want this on a public, verifiable profile?
+  → redential login && redential submit
 ```
 
 Pipe it (`redential scan | jq`) or pass `--json` and you get only the raw

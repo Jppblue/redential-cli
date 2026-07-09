@@ -7,6 +7,7 @@ import { startMockServer, type MockServer } from "./support/mock-server.js";
 import { saveCredentials } from "../src/credentials.js";
 import { executeSubmitCommand } from "../src/submit-command.js";
 import { AuthError, SubmitError } from "../src/errors.js";
+import { bundleContentHash, readLastSubmission } from "../src/submission-record.js";
 
 const dirs: string[] = [];
 const servers: MockServer[] = [];
@@ -44,7 +45,7 @@ function repoWithOneCommit(remote?: string): string {
 }
 
 describe("executeSubmitCommand", () => {
-  it("refuses when there is no stored session", async () => {
+  it("refuses when there is no stored session, with a friendly message pointing at `redential login` — not a raw/dry error", async () => {
     const dir = repoWithOneCommit();
     const configDir = tempConfigDir();
     await expect(
@@ -58,7 +59,7 @@ describe("executeSubmitCommand", () => {
         log: () => {},
         warn: () => {},
       })
-    ).rejects.toBeInstanceOf(AuthError);
+    ).rejects.toThrow(new AuthError("Not logged in. Run `redential login` first."));
   });
 
   it("refuses when the stored session belongs to a different site", async () => {
@@ -115,6 +116,63 @@ describe("executeSubmitCommand", () => {
     expect(req.body).toBe(printedBundleLine);
 
     expect(logs.some((l) => l.includes("bundle-123"))).toBe(true);
+  });
+
+  it("records the uploaded bundle locally on success, so a later scan can tell it's already submitted", async () => {
+    const server = await startMockServer((req) => {
+      if (req.url === "/api/cli/bundles") return { status: 200, body: { id: "bundle-123" } };
+      return { status: 404, body: {} };
+    });
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "secret-tok", site_url: server.url, obtained_at: "now" }, configDir);
+
+    const logs: string[] = [];
+    await executeSubmitCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      confirmUpload: true,
+      toolVersion: "0.1.0",
+      configDir,
+      log: (m) => logs.push(m),
+      warn: () => {},
+      checkForUpdateFn: noCheckForUpdate,
+    });
+
+    const printedBundleLine = logs.find((l) => l.trim().startsWith("{"))!;
+    const record = readLastSubmission(configDir);
+    expect(record).not.toBeNull();
+    expect(record!.site_url).toBe(server.url);
+    expect(record!.bundle_hash).toBe(bundleContentHash(JSON.parse(printedBundleLine)));
+  });
+
+  it("does NOT record a submission when the user declines the upload prompt", async () => {
+    const server = await startMockServer(() => ({ status: 200, body: { id: "should-not-be-called" } }));
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "secret-tok", site_url: server.url, obtained_at: "now" }, configDir);
+
+    await executeSubmitCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      confirmUpload: false,
+      promptConfirmUploadFn: async () => false,
+      toolVersion: "0.1.0",
+      configDir,
+      log: () => {},
+      warn: () => {},
+      checkForUpdateFn: noCheckForUpdate,
+    });
+
+    expect(readLastSubmission(configDir)).toBeNull();
   });
 
   it("aborts without uploading when the user declines the upload prompt", async () => {

@@ -1,5 +1,9 @@
 import { buildBundleInteractively, type BuildBundleOptions } from "./build-bundle.js";
 import { formatSummary } from "./summary.js";
+import { getSiteUrl } from "./config.js";
+import { readCredentials } from "./credentials.js";
+import { bundleContentHash, readLastSubmission } from "./submission-record.js";
+import type { Bundle } from "./types.js";
 
 export type ScanCommandOptions = BuildBundleOptions & {
   log?: (message: string) => void;
@@ -17,6 +21,31 @@ export type ScanCommandOptions = BuildBundleOptions & {
   // tests set it explicitly, same pattern as isTTY.
   plain?: boolean;
 };
+
+/**
+ * Local-only session/submission state for the wrapped summary's closing
+ * next-step hint (see summary.ts's three CTA states). Reads only the CLI's
+ * own config dir — same files login/submit already read/write — never the
+ * network, never the repo again. Computed lazily by the caller, only when
+ * the summary will actually be printed, so the common piped/`--json` path
+ * never touches these files.
+ */
+function nextStepsState(bundle: Bundle, configDir: string | undefined): {
+  hasSession: boolean;
+  alreadySubmittedIdentical: boolean;
+} {
+  const siteUrl = getSiteUrl();
+  const credentials = readCredentials(configDir);
+  const hasSession = credentials !== null && credentials.site_url === siteUrl;
+  if (!hasSession) return { hasSession: false, alreadySubmittedIdentical: false };
+
+  const lastSubmission = readLastSubmission(configDir);
+  const alreadySubmittedIdentical =
+    lastSubmission !== null &&
+    lastSubmission.site_url === siteUrl &&
+    lastSubmission.bundle_hash === bundleContentHash(bundle);
+  return { hasSession: true, alreadySubmittedIdentical };
+}
 
 /**
  * The `scan` command's actual behavior, independent of commander wiring —
@@ -38,6 +67,6 @@ export async function executeScanCommand(opts: ScanCommandOptions): Promise<void
 
   log(bundleJson);
   if (opts.isTTY && !opts.json) {
-    log(formatSummary(bundle, { plain: opts.plain }));
+    log(formatSummary(bundle, { plain: opts.plain, ...nextStepsState(bundle, opts.configDir) }));
   }
 }
