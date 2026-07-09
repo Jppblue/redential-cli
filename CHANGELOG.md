@@ -8,6 +8,24 @@ always bump at least minor; breaking schema changes bump major.
 ## [Unreleased]
 
 ### Changed
+- `languages`/`categories` churn computation now excludes checked-in
+  artifacts that aren't authored work: known lockfiles
+  (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lockb`),
+  `*.min.js`, anything under a `dist/`/`build/`/`.next/`/`node_modules/`
+  directory, and a new heuristic — a path whose entire churn (within the
+  selected author's commits) is a single commit adding 1,000+ lines, never
+  touched again, which is almost always a vendored/generated dump rather
+  than hand-authored code (`src/churn-exclusions.ts`). Without this, a
+  single dependency-install or build-output commit could dwarf months of
+  real work and dominate every share — this was visible in a real bundle
+  as `other` at 36% and `.json` at 19%, almost entirely lockfile/generated
+  noise. Excluded churn is removed from both the numerator and denominator
+  of every share (the file behaves as if it never existed for this
+  computation), not merely reclassified as `other`. No schema shape change
+  (`schema/bundle.v1.json`'s `languages`/`categories` definitions are
+  unchanged — this only changes which files count, not the field shapes),
+  so no version bump. Documented as part of the measurement contract in
+  `docs/schema.md`.
 - `scan`'s interactive author selection (`promptAuthors`): with a single
   candidate identity, replaced the numbered list with a Y/n confirmation
   ("Found 1 identity: you@example.com (12 commits). Is this you? (Y/n)"),

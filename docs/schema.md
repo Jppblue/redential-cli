@@ -73,6 +73,35 @@ survives, the path does not. `ai-workflow` detects agent-assisted
 development signals (Co-Authored-By trailers, presence of agent config
 files) as counts/booleans only.
 
+### What is excluded from churn
+
+Both `languages` and `categories` are computed only over churn that survives
+this exclusion list (`src/churn-exclusions.ts`) — part of the measurement
+contract, not an implementation detail, since it changes what a commit's
+"weight" means. Without it, one `npm install` or a checked-in build artifact
+can dwarf months of actually authored code and dominate every share.
+
+- **Known lockfiles**, matched by exact basename regardless of directory:
+  `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lockb`.
+- **Minified JS**: any path ending in `.min.js`.
+- **Build-output directories**: any path with `dist/`, `build/`, `.next/`,
+  or `node_modules/` as a full path segment (not a substring — a directory
+  literally named `redistribute/` is not excluded).
+- **Heuristically generated files**: a path whose entire churn — within the
+  selected author's own commits — is exactly ONE commit that added at least
+  1,000 lines (`GENERATED_FILE_MIN_ADDED_LINES`), with no commit touching it
+  before or after. A single huge add with no ongoing history is almost
+  always a vendored dependency, a generated client, or a one-time codegen
+  dump that happened to get committed — not hand-authored work. This is a
+  per-scan heuristic over the author's own commit set, not a repo-wide fact
+  (a legitimately huge one-off refactor commit that's never touched again
+  would also match — the tradeoff favors not letting a generated dump
+  inflate the numbers over perfectly classifying every edge case).
+
+Excluded churn is removed from BOTH the numerator and the denominator of
+every share — it's as if the file never existed for this computation, not
+merely reclassified as `other`.
+
 ## `detected_skills`
 
 Skills detected from the user's commits, e.g.:

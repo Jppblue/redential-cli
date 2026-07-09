@@ -195,6 +195,77 @@ describe("runScan", () => {
     ).toThrow(ScanError);
   });
 
+  it("excludes lockfiles, minified bundles, build dirs, and single-commit dumps from languages/categories", () => {
+    const dir = repo();
+    const configDir = tempConfigDir();
+    // A big lockfile (would fall into "other"), a vendored minified bundle
+    // under public/ (would fall into "frontend"), and a dist/ build output
+    // (would fall into "other") — alongside one real line of backend code.
+    // Without the exclusion, the checked-in artifacts' churn would dwarf
+    // the one real line and dominate languages/categories.
+    commit(dir, {
+      message: "add deps + real code",
+      authorName: "Grace",
+      authorEmail: "grace@example.com",
+      files: {
+        "package-lock.json": Array.from({ length: 2000 }, (_, i) => `"dep${i}": "1.0.0"`).join("\n"),
+        "public/vendor.min.js": Array.from({ length: 1500 }, () => "x").join(""),
+        "dist/bundle.js": Array.from({ length: 1200 }, () => "y").join("\n"),
+        "server/index.ts": "console.log(1)\n",
+      },
+    });
+
+    const bundle = runScan({
+      repoPath: dir,
+      authors: ["grace@example.com"],
+      confirmed: true,
+      toolVersion: "0.1.0",
+      configDir,
+    });
+
+    // Only the real source file's churn should count.
+    expect(bundle.languages).toEqual([{ extension: ".ts", share: 1 }]);
+    expect(bundle.categories).toEqual([{ name: "backend", commit_count: 1, churn_share: 1 }]);
+    expect(validateAgainstSchema(schema, bundle)).toEqual([]);
+  });
+
+  it("excludes a single-commit large add with no later history, even outside a recognized dir/name", () => {
+    const dir = repo();
+    const configDir = tempConfigDir();
+    // Deliberately a DIFFERENT extension and category from the real file
+    // below: if the heuristic exclusion were ever removed, this dump would
+    // show up as its own .graphql language entry and its own "other"
+    // category commit — either assertion below would then fail. Sharing an
+    // extension/category with the real file would let this test pass even
+    // with the exclusion silently deleted (caught in review).
+    commit(dir, {
+      message: "dump generated client",
+      authorName: "Heidi",
+      authorEmail: "heidi@example.com",
+      files: {
+        "src/generated-client.graphql": Array.from({ length: 1500 }, (_, i) => `# field${i}`).join("\n"),
+      },
+    });
+    commit(dir, {
+      message: "real work",
+      authorName: "Heidi",
+      authorEmail: "heidi@example.com",
+      files: { "server/index.ts": "console.log(1)\n" },
+    });
+
+    const bundle = runScan({
+      repoPath: dir,
+      authors: ["heidi@example.com"],
+      confirmed: true,
+      toolVersion: "0.1.0",
+      configDir,
+    });
+
+    expect(bundle.languages).toEqual([{ extension: ".ts", share: 1 }]);
+    expect(bundle.categories).toEqual([{ name: "backend", commit_count: 1, churn_share: 1 }]);
+    expect(validateAgainstSchema(schema, bundle)).toEqual([]);
+  });
+
   it("requires at least one selected author", () => {
     const dir = repo();
     const configDir = tempConfigDir();

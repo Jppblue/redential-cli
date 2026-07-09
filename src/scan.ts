@@ -4,6 +4,7 @@ import { saltedHash } from "./hash.js";
 import { getOrCreateSalt } from "./salt.js";
 import { merkleRoot } from "./merkle.js";
 import { categorize } from "./categorize.js";
+import { isExcludedPath, heuristicallyGeneratedPaths } from "./churn-exclusions.js";
 import { assertNoSecrets } from "./secret-scan.js";
 import type { Bundle, CategoryName, LanguageShare, CategoryShare } from "./types.js";
 
@@ -132,6 +133,8 @@ function computeChurnBreakdown(userCommits: RawCommit[]): {
   languages: LanguageShare[];
   categories: CategoryShare[];
 } {
+  const generatedPaths = heuristicallyGeneratedPaths(userCommits);
+
   const churnByExt = new Map<string, number>();
   const churnByCategory = new Map<CategoryName, number>();
   const commitsByCategory = new Map<CategoryName, Set<string>>();
@@ -143,6 +146,10 @@ function computeChurnBreakdown(userCommits: RawCommit[]): {
     for (const f of c.churn) {
       const churn = f.added + f.deleted;
       if (churn === 0) continue;
+      // Lockfiles, minified bundles, build-output dirs, and single-commit
+      // generated dumps are checked-in artifacts, not authored work — see
+      // docs/schema.md's "What is excluded from churn".
+      if (isExcludedPath(f.path) || generatedPaths.has(f.path)) continue;
 
       const ext = normalizeExtension(f.path);
       if (ext) {
