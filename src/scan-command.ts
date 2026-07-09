@@ -11,6 +11,11 @@ export type ScanCommandOptions = BuildBundleOptions & {
   isTTY?: boolean;
   // Forces JSON-only output even when stdout is a TTY.
   json?: boolean;
+  // True to render the summary with the ASCII/no-color fallback theme
+  // (see summary.ts's shouldUsePlainOutput) instead of ANSI + Unicode
+  // box-drawing. cli.ts computes this from process.platform/process.env;
+  // tests set it explicitly, same pattern as isTTY.
+  plain?: boolean;
 };
 
 /**
@@ -33,6 +38,6 @@ export async function executeScanCommand(opts: ScanCommandOptions): Promise<void
 
   log(bundleJson);
   if (opts.isTTY && !opts.json) {
-    log(formatSummary(bundle));
+    log(formatSummary(bundle, { plain: opts.plain }));
   }
 }

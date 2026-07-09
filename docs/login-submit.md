@@ -61,13 +61,32 @@ Nothing except the device code itself is ever sent during this flow.
 
 ## Where the token lives
 
-`~/.config/redential/credentials.json`, mode `0600` — the same directory
-and permission pattern as the device salt (`salt.ts`). Contents:
-`{access_token, site_url, obtained_at}`. `site_url` records which
+`credentials.json` in the OS-appropriate per-user config directory
+(`config.ts`'s `DEFAULT_CONFIG_DIR`, derived purely from `os.homedir()`,
+no env var reads, no dependency):
+
+| Platform | Path |
+|---|---|
+| macOS / Linux | `~/.config/redential/credentials.json` |
+| Windows | `%USERPROFILE%\AppData\Roaming\redential\credentials.json` |
+
+Same directory as the device salt (`salt.ts`), written with mode `0600`.
+Contents: `{access_token, site_url, obtained_at}`. `site_url` records which
 `SITE_URL` issued the token: `submit` refuses (and asks you to log in
 again) if the CLI's current `SITE_URL` doesn't match, so a
 `REDENTIAL_SITE_URL` change can never silently send a stored token to a
 different host.
+
+**0600 on Windows.** NTFS has no POSIX permission bits, so the `mode: 0o600`
+passed to `writeFileSync` is a no-op there — it restricts nothing and
+errors on nothing. What actually protects the token on Windows is NTFS ACL
+inheritance: a file created under the user's own `%USERPROFILE%\AppData`
+tree inherits that directory's ACL, which by default grants access only to
+the owning account plus Administrators/SYSTEM — not to other local user
+accounts. This is a different mechanism than POSIX mode bits, not a
+weaker one for the single-user-machine threat model this CLI assumes, but
+it's worth being precise about: it's an OS default, not something this
+CLI configures or verifies itself.
 
 `logout` deletes this file. It never touches the device salt (`salt`,
 sibling file in the same directory) — the salt is device-local and

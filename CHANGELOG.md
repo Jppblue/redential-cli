@@ -7,6 +7,47 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+### Added
+- **Windows support, verified by CI.** `.github/workflows/ci.yml` now runs
+  the full test suite on a matrix of `ubuntu-latest`/`macos-latest`/
+  `windows-latest` × Node 20/22 (6 cells, `fail-fast: false`). Fixes and
+  hardening that came out of auditing the codebase for this:
+  - **Platform-appropriate config directory.** `config.ts`'s
+    `DEFAULT_CONFIG_DIR` (shared by `credentials.json` and the device
+    `salt`) is now derived per-platform from `os.homedir()`:
+    `~/.config/redential` on macOS/Linux (unchanged),
+    `%USERPROFILE%\AppData\Roaming\redential` on Windows (new — there is no
+    prior Windows install to migrate from). Documented in
+    [docs/login-submit.md](docs/login-submit.md#where-the-token-lives),
+    including why the `0600` file mode is a no-op on Windows (NTFS has no
+    POSIX permission bits) and what actually protects the token there
+    (NTFS ACL inheritance from the user's own profile directory).
+  - **CRLF-safe diff parsing.** `git.ts`'s `getCommitAddedLines` now
+    normalizes `\r\n` to `\n` on the raw `git show` output before any
+    parsing — a CRLF-authored file's added lines previously carried a
+    trailing `\r` once split only on `\n`, which could perturb
+    `import-detect.ts`'s line-anchored regexes (JS treats a bare `\r` as
+    its own line terminator under the `m` flag). This can happen on any
+    scanning OS, not just Windows. Covered by a new
+    `test/git.test.ts` CRLF fixture test; `test/support/fixtures.ts`'s
+    `createRepo` now pins `core.autocrlf=false` so fixture repos store
+    bytes verbatim on every CI platform instead of a Windows runner's
+    global `autocrlf=true` silently normalizing injected CRLF test content
+    away before it reaches a diff.
+  - **Plain-terminal fallback for the "wrapped" summary.** `summary.ts`
+    gained a themed rendering path: `shouldUsePlainOutput` detects plain
+    Windows `conhost` (no `WT_SESSION`/`TERM_PROGRAM`/`ConEmuANSI=ON`) and
+    switches the TTY-only summary to a pure-ASCII, no-color theme instead
+    of ANSI + Unicode box-drawing/block characters — same data, different
+    rendering. Wired through `scan-command.ts`'s new `plain` option and
+    computed once in `cli.ts`.
+  - Confirmed `execFileSync("git", ...)` (no `shell: true`) and the
+    `categorize.ts`/`churn-exclusions.ts` hardcoded `"/"` path-splitting
+    need no change: git always reports paths `/`-separated regardless of
+    host OS, and spawning a bare executable name without a shell resolves
+    correctly via Windows' own PATH/PATHEXT search.
+- README: supported-platforms line (macOS, Linux, Windows; Node 20/22).
+
 ## [0.1.0] - 2026-07-09
 
 ### Added

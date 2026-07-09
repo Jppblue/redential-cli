@@ -137,6 +137,16 @@ export function getCommitAddedLines(repoPath: string, sha: string): AddedLines[]
     return [];
   }
 
+  // Diff CONTENT lines mirror the file's own line endings — a CRLF-authored
+  // file's "+" lines each carry a trailing \r once this only splits on "\n"
+  // below. That \r would otherwise leak into every downstream regex in
+  // import-detect.ts (JS's `^`/`$` under the `m` flag treat a bare \r as
+  // its own line terminator, independent of \n) and, worse, potentially
+  // into a matched package name itself. This can happen on any OS that
+  // scans a CRLF-authored file, not just Windows — normalize once, up
+  // front, rather than special-case every parser downstream.
+  out = out.replace(/\r\n/g, "\n");
+
   const files: AddedLines[] = [];
   let currentPath: string | null = null;
   let currentLines: string[] = [];

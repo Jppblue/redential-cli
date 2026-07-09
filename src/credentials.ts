@@ -22,7 +22,16 @@ export function readCredentials(configDir: string = DEFAULT_CONFIG_DIR): Credent
   return JSON.parse(readFileSync(path, "utf8")) as Credentials;
 }
 
-/** 0600 — same permission pattern as salt.ts's device salt. */
+/**
+ * 0600 — same permission pattern as salt.ts's device salt. `mode` is a
+ * no-op on Windows: NTFS has no POSIX permission bits, so this restricts
+ * nothing there. What actually protects the token on Windows is NTFS ACL
+ * inheritance — a file created under the user's own profile directory
+ * (`%USERPROFILE%\AppData\Roaming\redential`, see config.ts) inherits that
+ * directory's ACL, which by default grants access only to the owning
+ * account plus Administrators/SYSTEM, not to other local users. See
+ * docs/login-submit.md for the full per-platform explanation.
+ */
 export function saveCredentials(credentials: Credentials, configDir: string = DEFAULT_CONFIG_DIR): void {
   mkdirSync(configDir, { recursive: true });
   writeFileSync(credentialsPath(configDir), JSON.stringify(credentials), { mode: 0o600 });

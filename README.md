@@ -36,6 +36,9 @@ npm install -g @redential/cli
 redential scan
 ```
 
+Supported platforms: macOS, Linux, and Windows, on Node.js 20 and 22 —
+every release is verified against all six by CI.
+
 ## What `scan` looks like
 
 It prints the full JSON bundle first (see [docs/schema.md](docs/schema.md)

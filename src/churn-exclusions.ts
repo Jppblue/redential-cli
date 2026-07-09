@@ -14,6 +14,10 @@ const MINIFIED_PATTERN = /\.min\.js$/i;
 // substring like "redistribute/" or a same-named leaf file.
 const GENERATED_DIR_PATTERN = /(^|\/)(dist|build|\.next|node_modules)\//i;
 
+// `path` is always a git-reported path (see categorize.ts's own note), so
+// splitting on "/" is correct on every host OS, including Windows — this
+// is deliberately not node:path's `basename`, which would split on "\"
+// there and never match.
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? path : path.slice(idx + 1);

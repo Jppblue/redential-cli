@@ -24,6 +24,12 @@ function run(cwd: string, args: string[], env?: Record<string, string>): string 
 export function createRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "redential-test-"));
   run(dir, ["init", "-q", "-b", "main"]);
+  // Without this, a CI runner whose global gitconfig sets core.autocrlf=true
+  // (the Windows default) would silently rewrite any CRLF bytes a fixture
+  // writes into LF on `git add`, before they ever reach a diff — masking
+  // exactly the line-ending bugs these fixtures exist to catch on that one
+  // platform. Repo-local, so it can never affect the CLI's own git config.
+  run(dir, ["config", "core.autocrlf", "false"]);
   return dir;
 }
 
@@ -104,5 +110,9 @@ export function setRemote(dir: string, url: string): void {
 }
 
 export function cleanup(dir: string): void {
-  rmSync(dir, { recursive: true, force: true });
+  // maxRetries/retryDelay: on Windows, a just-closed git process or an
+  // antivirus scanner can hold a brief file lock after this function is
+  // called, turning an otherwise-harmless rmSync into a flaky EPERM/EBUSY.
+  // A no-op everywhere else — POSIX unlink doesn't fail this way.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }

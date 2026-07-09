@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatSummary } from "../src/summary.js";
+import { formatSummary, shouldUsePlainOutput } from "../src/summary.js";
 import type { Bundle } from "../src/types.js";
 
 // eslint-disable-next-line no-control-regex
@@ -141,5 +141,52 @@ describe("formatSummary", () => {
     const text = formatSummary(baseBundle());
     expect(text).not.toContain("{");
     expect(text).not.toContain("}");
+  });
+
+  it("plain mode ({ plain: true }) is pure printable ASCII — no ANSI escapes, no Unicode", () => {
+    const text = formatSummary(baseBundle(), { plain: true });
+    // eslint-disable-next-line no-control-regex
+    expect(text).toMatch(/^[\x20-\x7e\n]*$/);
+  });
+
+  it("plain mode still renders the same data (commit count, span, ownership)", () => {
+    const text = formatSummary(baseBundle(), { plain: true });
+    expect(text).toContain("2 years, 1,847 commits");
+    expect(text).toContain("78%");
+    expect(text).toContain("ai/anthropic-api");
+  });
+
+  it("rich mode (default) contains ANSI escapes and Unicode box-drawing", () => {
+    const text = formatSummary(baseBundle());
+    // eslint-disable-next-line no-control-regex
+    expect(text).toMatch(/\x1b\[[0-9;]*m/);
+    expect(text).toContain("╔");
+  });
+});
+
+describe("shouldUsePlainOutput", () => {
+  it("is always false on non-Windows platforms, regardless of env", () => {
+    expect(shouldUsePlainOutput("darwin", {})).toBe(false);
+    expect(shouldUsePlainOutput("linux", {})).toBe(false);
+  });
+
+  it("is true on win32 with no known ANSI/UTF-8-capable wrapper in env", () => {
+    expect(shouldUsePlainOutput("win32", {})).toBe(true);
+  });
+
+  it("is false on win32 inside Windows Terminal (WT_SESSION set)", () => {
+    expect(shouldUsePlainOutput("win32", { WT_SESSION: "abc" })).toBe(false);
+  });
+
+  it("is false on win32 inside a TERM_PROGRAM-reporting terminal (e.g. VS Code)", () => {
+    expect(shouldUsePlainOutput("win32", { TERM_PROGRAM: "vscode" })).toBe(false);
+  });
+
+  it("is false on win32 under ConEmu (ConEmuANSI=ON)", () => {
+    expect(shouldUsePlainOutput("win32", { ConEmuANSI: "ON" })).toBe(false);
+  });
+
+  it("is true on win32 when ConEmuANSI is present but not \"ON\"", () => {
+    expect(shouldUsePlainOutput("win32", { ConEmuANSI: "OFF" })).toBe(true);
   });
 });

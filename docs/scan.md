@@ -46,10 +46,22 @@ total commits and span, an hour-of-day and weekday cadence, top languages
 and categories, detected skills, ownership and signed-commit ratios —
 under a divider. It's printed last on purpose: the JSON scrolls up, and
 the summary is what's left on screen once the command finishes. It's
-rendered with ANSI colors and box-drawing characters only (no new
+rendered with ANSI colors and Unicode box-drawing characters only (no new
 dependency), and is derived entirely from the bundle `scan` already
 computed: no new data collection, no network, nothing beyond what's
 already in the JSON above it.
+
+**Plain-terminal fallback.** Plain Windows `conhost` (`cmd.exe` / classic
+PowerShell without Windows Terminal) doesn't reliably render either ANSI
+escapes or the Unicode block/box-drawing characters above on a legacy
+console codepage. `shouldUsePlainOutput` (`src/summary.ts`) detects this —
+`win32` with none of `WT_SESSION`/`TERM_PROGRAM`/`ConEmuANSI=ON` set (all
+three mark a modern, UTF-8-and-ANSI-capable wrapper: Windows Terminal, VS
+Code's integrated terminal, ConEmu) — and swaps in a pure-ASCII, no-color
+theme instead: `#`/`-` bars, `+`/`=`/`|` box corners/edges, `.` through `#`
+sparkline levels. Every other platform, and every recognized Windows
+terminal, gets the rich theme. Same data either way — this only changes
+how it's drawn.
 
 ```
 {
@@ -104,12 +116,12 @@ output.
 ## Design notes
 
 - **Device salt.** `repo_fingerprint` and `author_identity_hashes` are
-  salted with a random value generated once and persisted at
-  `~/.config/redential/salt` (0600), the same pattern as
-  `credentials.json` (see [login-submit.md](login-submit.md)). The salt is
-  device-local, not account-anchored — it survives `redential logout` and
-  its only job is preventing rainbow-table lookups, independent of any
-  session.
+  salted with a random value generated once and persisted at `salt` inside
+  the same per-platform config directory as `credentials.json` — see
+  [login-submit.md](login-submit.md#where-the-token-lives) for the exact
+  path on each OS. The salt is device-local, not account-anchored — it
+  survives `redential logout` and its only job is preventing
+  rainbow-table lookups, independent of any session.
 - **Empty / unmatched repos fail loudly.** A repository with zero commits,
   or a `--author` that matches no commits, raises an error and exits
   non-zero rather than fabricating a bundle with meaningless dates.

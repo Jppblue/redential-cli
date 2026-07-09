@@ -1,5 +1,11 @@
 import type { CategoryName } from "./types.js";
 
+// filePath here is always a git-reported path (from `git log --numstat` /
+// `git show`), which git always emits "/"-separated regardless of the host
+// OS — never a filesystem path built with node:path, and never backslashes
+// even on Windows. Hardcoding "/" below is therefore correct on every
+// platform, not a Windows bug.
+//
 // Order matters: first matching rule wins.
 const RULES: Array<[RegExp, CategoryName]> = [
   [/(^|\/)(__tests__|tests?|specs?)(\/|$)|\.(test|spec)\.[jt]sx?$/i, "testing"],

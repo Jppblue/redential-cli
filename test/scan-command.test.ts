@@ -154,6 +154,26 @@ describe("executeScanCommand", () => {
     expect(() => JSON.parse(logs[0])).not.toThrow();
   });
 
+  it("plain: true renders the summary with the ASCII fallback theme (no ANSI, no box-drawing)", async () => {
+    const dir = repoWithOneCommit();
+    const logs: string[] = [];
+    await executeScanCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      toolVersion: "test",
+      configDir: tempConfigDir(),
+      log: (m) => logs.push(m),
+      isTTY: true,
+      plain: true,
+    });
+
+    expect(logs).toHaveLength(2);
+    // eslint-disable-next-line no-control-regex
+    expect(logs[1]).toMatch(/^[\x20-\x7e\n]*$/);
+    expect(logs[1]).not.toContain("╔");
+  });
+
   it("the JSON printed in TTY mode is byte-identical to what non-TTY mode prints", async () => {
     const dir = repoWithOneCommit();
     const configDir = tempConfigDir();

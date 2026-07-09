@@ -7,6 +7,7 @@ import { executeScanCommand } from "./scan-command.js";
 import { executeSubmitCommand } from "./submit-command.js";
 import { runLogin } from "./login.js";
 import { runLogout } from "./logout.js";
+import { shouldUsePlainOutput } from "./summary.js";
 
 function getToolVersion(): string {
   const pkgUrl = new URL("../package.json", import.meta.url);
@@ -75,6 +76,7 @@ program
         toolVersion: getToolVersion(),
         isTTY: process.stdout.isTTY === true,
         json: options.json,
+        plain: shouldUsePlainOutput(process.platform, process.env),
       })
     );
   });

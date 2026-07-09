@@ -82,8 +82,15 @@ describe("runLogin (device flow against a mocked local server)", () => {
     expect(stored.access_token).toBe("secret-token-abc");
     expect(stored.site_url).toBe(server.url);
 
-    const mode = statSync(credPath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    // Windows has no POSIX permission bits — Node synthesizes `stat.mode`
+    // from file attributes there (a writable file reports 0o666, never
+    // whatever was passed to `writeFileSync`'s `mode` option), so this
+    // assertion only holds on POSIX. See docs/login-submit.md's "0600 on
+    // Windows" note for what actually protects the file on win32 instead.
+    if (process.platform !== "win32") {
+      const mode = statSync(credPath).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
   });
 
   it("honors slow_down by backing off, without failing", async () => {
