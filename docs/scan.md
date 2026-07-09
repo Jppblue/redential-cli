@@ -6,6 +6,7 @@ that `submit` would upload later — nothing is sent anywhere by `scan` itself.
 ```bash
 redential scan --repo <path>              # interactive author + confirmation
 redential scan --author you@example.com --yes   # non-interactive
+redential scan --repo <path> --json       # force JSON-only, even in a terminal
 ```
 
 ## How it works
@@ -36,6 +37,57 @@ redential scan --author you@example.com --yes   # non-interactive
    matched).
 5. **Print it.** The JSON printed IS the bundle — byte for byte what
    `submit` would send later.
+
+## The "wrapped" summary
+
+When stdout is an interactive terminal, `scan` prints a human-readable
+summary — total commits and span, an hour-of-day and weekday cadence, top
+languages and categories, detected skills, ownership and signed-commit
+ratios — **before** the JSON, under a divider. It's rendered with ANSI
+colors and box-drawing characters only (no new dependency), and is derived
+entirely from the bundle `scan` already computed: no new data collection,
+no network, nothing beyond what's already in the JSON below it.
+
+```
+  ╔════════════════════════════════════════════════════════════╗
+  ║                 YOUR PRIVATE REPO, WRAPPED                 ║
+  ╚════════════════════════════════════════════════════════════╝
+
+  2 years, 1,847 commits
+
+  COMMITS BY HOUR (UTC)
+  0     6     12    18
+  ▁····▁▁▃▅█▇▄▃▂▂▁▁▁▁▁····
+
+  COMMITS BY WEEKDAY
+  Sun  ██░░░░░░░░░░░░░░░░░░  5
+  Mon  ███████████████████░  40
+  ...
+
+  TOP LANGUAGES
+  .ts    ████████████████████   62%
+  ...
+
+  SKILLS DETECTED
+  ai/anthropic-api    14 commits
+  ...
+
+  Ownership       78% of this repo's commits are yours
+  Signed commits  45% of your commits are cryptographically signed
+
+  Nothing left your machine. Verify: github.com/Jppblue/redential-cli
+
+  ────────────────────────────────────────────────────────────
+{
+  "schema_version": "1.0.0",
+  ...
+```
+
+This only happens on a real TTY. `scan | jq` (or any redirected/piped
+stdout) prints **only** the raw JSON, byte-identical to before this
+summary existed — `--json` forces that same JSON-only behavior even on a
+terminal, for scripts that run interactively but still want machine
+output.
 
 ## Design notes
 

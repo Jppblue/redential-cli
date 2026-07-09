@@ -61,13 +61,20 @@ program
     "confirm 'I am authorized to analyze this repository' non-interactively",
     false
   )
-  .action(async (options: { repo: string; author: string[]; yes: boolean }) => {
+  .option(
+    "--json",
+    "force JSON-only output, even on an interactive terminal (default when piped)",
+    false
+  )
+  .action(async (options: { repo: string; author: string[]; yes: boolean; json: boolean }) => {
     await run(() =>
       executeScanCommand({
         repoPath: resolve(options.repo),
         author: options.author,
         yes: options.yes,
         toolVersion: getToolVersion(),
+        isTTY: process.stdout.isTTY === true,
+        json: options.json,
       })
     );
   });

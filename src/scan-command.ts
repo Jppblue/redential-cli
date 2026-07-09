@@ -1,16 +1,37 @@
 import { buildBundleInteractively, type BuildBundleOptions } from "./build-bundle.js";
+import { formatSummary } from "./summary.js";
 
 export type ScanCommandOptions = BuildBundleOptions & {
   log?: (message: string) => void;
+  // True when stdout is an interactive terminal — cli.ts passes
+  // `process.stdout.isTTY`. Determines whether the human-readable summary
+  // is prepended; tests set this explicitly instead of relying on a real
+  // TTY. Undefined behaves like `false` (JSON-only), matching a piped
+  // stdout so `scan | jq` never sees anything but the bundle.
+  isTTY?: boolean;
+  // Forces JSON-only output even when stdout is a TTY.
+  json?: boolean;
 };
 
 /**
  * The `scan` command's actual behavior, independent of commander wiring —
  * exists mainly so the public-host warning ("warn, never block") is
  * testable without spawning the built CLI.
+ *
+ * Output contract: piped/redirected stdout (or `--json`) always gets ONLY
+ * the raw bundle JSON, byte-identical to before the summary existed, so
+ * `scan | jq` keeps working. A real TTY (and no `--json`) gets the
+ * human-readable "wrapped" summary first, then the same JSON below it —
+ * the summary is pure formatting over the bundle `runScan` already
+ * computed, not a second data source.
  */
 export async function executeScanCommand(opts: ScanCommandOptions): Promise<void> {
   const log = opts.log ?? console.log;
   const bundle = await buildBundleInteractively(opts);
-  log(JSON.stringify(bundle, null, 2));
+  const bundleJson = JSON.stringify(bundle, null, 2);
+
+  if (opts.isTTY && !opts.json) {
+    log(formatSummary(bundle));
+  }
+  log(bundleJson);
 }

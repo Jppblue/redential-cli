@@ -10,7 +10,7 @@ declare var process: {
   env: Record<string, string | undefined>;
   platform: string;
   stdin: unknown;
-  stdout: unknown;
+  stdout: { isTTY?: boolean };
   stderr: unknown;
   exit(code?: number): never;
 };

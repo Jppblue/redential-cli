@@ -7,6 +7,22 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+### Added
+- **`scan`'s "wrapped" terminal summary.** When stdout is an interactive
+  terminal, `scan` now prints a human-readable summary — total commits and
+  span, an hour-of-day sparkline and weekday bar chart, top languages and
+  categories, detected skills (or a teaser when none matched), ownership
+  and signed-commit ratios, and a closing "Nothing left your machine"
+  line — **before** the JSON bundle, under a divider (`src/summary.ts`).
+  Rendered with ANSI colors and box-drawing characters only — no new
+  dependency — and is pure formatting over the bundle `runScan` already
+  computed: no new data collection, zero network, nothing the JSON below
+  it doesn't already contain. A new `--json` flag forces JSON-only output
+  even on a terminal. Piped/redirected stdout is unaffected: `scan | jq`
+  still gets only the raw bundle, byte-identical to before this summary
+  existed (`test/scan-command.test.ts`'s byte-identical-output test).
+  Documented in [docs/scan.md](docs/scan.md).
+
 ### Changed
 - **Skill detection refactored to two tiers.** Previously every technology
   needed its own hand-written `signatures/*.json` regex file (48 of them).
