@@ -13,6 +13,28 @@ closed regardless of code quality — sorry, the trust contract comes first.
 Everything else (bug fixes, performance, DX, docs, tests): PRs welcome
 directly.
 
+## Adding a skill signature (most common contribution)
+
+If a technology's import unambiguously identifies it, this is a one-line
+PR — no discussion issue needed, since it only adds a taxonomy-valid slug
+to public data, never code:
+
+```json
+"some-new-package": "category/slug"
+```
+
+added to `signatures/package-map.json`. If `category/slug` doesn't exist
+yet, add it to `taxonomy.json` first — a map entry naming a slug outside
+`taxonomy.json` fails to load. If the import alone is ambiguous, or there's
+no import at all (a config file, a framework-inherited API), write a
+Tier 2 signature file at `signatures/<category>/<name>.json` instead, with
+at least one positive and one negative fixture. Full detection rules and
+the exact test contract: [docs/signatures.md](docs/signatures.md).
+
+Either way: run `npm test` (it picks up new map entries and signature
+files automatically) and add a line to `CHANGELOG.md` under `[Unreleased]`
+before opening the PR.
+
 ## Ground rules
 
 - The privacy test suite (`test/privacy/`) is the contract. If your change
