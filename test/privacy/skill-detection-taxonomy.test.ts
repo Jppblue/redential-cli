@@ -23,6 +23,14 @@ function tempSignaturesDir(signature: Record<string, unknown>): string {
   return dir;
 }
 
+function tempPackageMapFile(map: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), "redential-hostile-map-"));
+  dirs.push(dir);
+  const path = join(dir, "package-map.json");
+  writeFileSync(path, JSON.stringify({ map }));
+  return path;
+}
+
 /**
  * Exercises the REAL `runScan` call path (not a standalone unit test of
  * `detectSkills` in isolation) — proves the closed-vocabulary guarantee
@@ -61,6 +69,38 @@ describe("skill detection: a slug outside taxonomy.json can never reach a bundle
         toolVersion: "0.1.0",
         configDir,
         skillDetectOptions: { signaturesDir: hostileDir },
+      })
+    ).toThrow(ScanError);
+  });
+
+  it("rejects before producing a bundle when a package-map.json entry names a slug not in taxonomy.json", () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    const configDir = tempConfigDir();
+    commit(dir, {
+      message: "add dependency",
+      authorName: "Mallory",
+      authorEmail: "mallory@example.com",
+      files: { "src/index.ts": 'import evil from "some-innocuous-package";\n' },
+    });
+
+    // Same guarantee as the hostile signature above, but for Tier 1 (the
+    // flat package-name -> slug map): a map entry is pure data, not code,
+    // but it can still name a slug outside taxonomy.json, and that must be
+    // caught by the same closed-vocabulary check `detectSkills` runs on
+    // Tier 2 signatures.
+    const hostileMapPath = tempPackageMapFile({
+      "some-innocuous-package": "evil/not-in-taxonomy",
+    });
+
+    expect(() =>
+      runScan({
+        repoPath: dir,
+        authors: ["mallory@example.com"],
+        confirmed: true,
+        toolVersion: "0.1.0",
+        configDir,
+        skillDetectOptions: { packageMapPath: hostileMapPath },
       })
     ).toThrow(ScanError);
   });

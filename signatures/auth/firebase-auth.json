@@ -1,0 +1,43 @@
+{
+  "slug": "auth/firebase-auth",
+  "importPatterns": [
+    "from\\s+[\"']firebase(-admin)?/auth[\"']",
+    "require\\(\\s*[\"']firebase(-admin)?/auth[\"']\\s*\\)"
+  ],
+  "apiPatterns": [
+    "\\bsignInWithEmailAndPassword\\(",
+    "\\bsignInWithPopup\\(",
+    "\\bcreateUserWithEmailAndPassword\\("
+  ],
+  "configFilePatterns": [],
+  "fixtures": {
+    "positive": [
+      {
+        "path": "src/lib/firebase.ts",
+        "diff": "import { getAuth, signInWithEmailAndPassword } from \"firebase/auth\";\nconst auth = getAuth(app);\nawait signInWithEmailAndPassword(auth, email, password);"
+      },
+      {
+        "path": "src/lib/firebase-admin.ts",
+        "diff": "import { getAuth } from \"firebase-admin/auth\";\nconst adminAuth = getAuth();"
+      },
+      {
+        "path": "src/lib/firebase-social.ts",
+        "diff": "import { getAuth, signInWithPopup, GoogleAuthProvider, createUserWithEmailAndPassword } from \"firebase/auth\";\nconst auth = getAuth(app);\nawait signInWithPopup(auth, new GoogleAuthProvider());\nawait createUserWithEmailAndPassword(auth, email, password);"
+      },
+      {
+        "path": "src/lib/firebase-legacy.js",
+        "diff": "const { getAuth } = require(\"firebase/auth\");\nconst auth = getAuth();"
+      }
+    ],
+    "negative": [
+      {
+        "path": "README.md",
+        "diff": "We use Firebase for Firestore and Storage in this service, not for authentication."
+      },
+      {
+        "path": "src/lib/clerk.ts",
+        "diff": "import { getAuth } from \"@clerk/nextjs/server\";\nconst { userId } = getAuth(req);"
+      }
+    ]
+  }
+}

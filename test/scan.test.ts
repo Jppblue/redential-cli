@@ -360,4 +360,98 @@ describe("runScan", () => {
       runScan({ repoPath: dir, authors: [], confirmed: true, toolVersion: "0.1.0", configDir })
     ).toThrow(ScanError);
   });
+
+  it("aggregates detected_skills across multiple non-consecutive commits", () => {
+    const dir = repo();
+    const configDir = tempConfigDir();
+    // Each "stripe" commit must ADD a fresh import line of its own — git
+    // diffs only show what changed, so re-touching the same already-stripe
+    // file without re-adding the import line would NOT re-trigger
+    // detection (verified: an earlier draft of this fixture reused one
+    // file across commits and only counted 1, not 3, for exactly this
+    // reason). Three distinct files, each introducing its own import.
+    commit(dir, {
+      message: "1: add stripe",
+      authorName: "Liam",
+      authorEmail: "liam@example.com",
+      files: { "src/pay.ts": 'import Stripe from "stripe";\n' },
+      authorDate: "2026-01-01T10:00:00Z",
+    });
+    commit(dir, {
+      message: "2: unrelated",
+      authorName: "Liam",
+      authorEmail: "liam@example.com",
+      files: { "src/misc.ts": "export const x = 1;\n" },
+      authorDate: "2026-01-02T10:00:00Z",
+    });
+    commit(dir, {
+      message: "3: use stripe again, in a new file",
+      authorName: "Liam",
+      authorEmail: "liam@example.com",
+      files: { "src/pay2.ts": 'import Stripe from "stripe";\nconst s = new Stripe("x");\n' },
+      authorDate: "2026-01-03T10:00:00Z",
+    });
+    commit(dir, {
+      message: "4: unrelated again",
+      authorName: "Liam",
+      authorEmail: "liam@example.com",
+      files: { "src/misc.ts": "export const x = 2;\n" },
+      authorDate: "2026-01-04T10:00:00Z",
+    });
+    commit(dir, {
+      message: "5: use stripe a third time, in another new file",
+      authorName: "Liam",
+      authorEmail: "liam@example.com",
+      files: { "src/pay3.ts": 'import Stripe from "stripe";\nconst s2 = new Stripe("y");\n' },
+      authorDate: "2026-01-05T10:00:00Z",
+    });
+
+    const bundle = runScan({
+      repoPath: dir,
+      authors: ["liam@example.com"],
+      confirmed: true,
+      toolVersion: "0.1.0",
+      configDir,
+    });
+
+    expect(bundle.detected_skills).toEqual([
+      {
+        slug: "payments/stripe",
+        commit_count: 3,
+        first_seen: "2026-01-01T10:00:00.000Z",
+        last_seen: "2026-01-05T10:00:00.000Z",
+      },
+    ]);
+    expect(validateAgainstSchema(schema, bundle)).toEqual([]);
+  });
+
+  it("scans a 300-commit repo in under 30 seconds", () => {
+    const dir = repo();
+    const configDir = tempConfigDir();
+    for (let i = 0; i < 300; i++) {
+      const day = String((i % 27) + 1).padStart(2, "0");
+      commit(dir, {
+        message: `commit ${i}`,
+        authorName: "Nora",
+        authorEmail: "nora@example.com",
+        files: {
+          [`src/file${i % 20}.ts`]: `export const value${i} = ${i};\nimport Stripe from "stripe";\n`,
+        },
+        authorDate: `2026-01-${day}T${String(i % 24).padStart(2, "0")}:00:00Z`,
+      });
+    }
+
+    const start = Date.now();
+    const bundle = runScan({
+      repoPath: dir,
+      authors: ["nora@example.com"],
+      confirmed: true,
+      toolVersion: "0.1.0",
+      configDir,
+    });
+    const elapsedMs = Date.now() - start;
+
+    expect(bundle.commits.user_total).toBe(300);
+    expect(elapsedMs).toBeLessThan(30_000);
+  }, 90_000);
 });

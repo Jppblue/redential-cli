@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { getCommitAddedLines, type RawCommit } from "./git.js";
 import { isExcludedPath, heuristicallyGeneratedPaths } from "./churn-exclusions.js";
+import { extractImportedPackages } from "./import-detect.js";
 import { ScanError } from "./errors.js";
 import type { DetectedSkill } from "./types.js";
 
@@ -34,6 +35,7 @@ interface CompiledSignature {
 // package root, so this resolves correctly both in dev and post-build.
 const DEFAULT_SIGNATURES_DIR = fileURLToPath(new URL("../signatures", import.meta.url));
 const DEFAULT_TAXONOMY_PATH = fileURLToPath(new URL("../taxonomy.json", import.meta.url));
+const DEFAULT_PACKAGE_MAP_PATH = fileURLToPath(new URL("../signatures/package-map.json", import.meta.url));
 
 // A single added line long enough to be minified/generated noise, not a
 // hand-authored import or API call — never worth pattern-matching, and
@@ -47,6 +49,12 @@ function boundedAddedLines(addedLines: string): string {
     .join("\n");
 }
 
+// package-map.json is Tier 1's own data file, sitting directly under
+// signatures/ (not inside a category subdirectory) — it has a different
+// shape entirely ({"map": {...}}, not {"slug", "fixtures", ...}) and must
+// never be picked up as if it were a Tier 2 signature file.
+const PACKAGE_MAP_FILENAME = "package-map.json";
+
 function listJsonFilesRecursive(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
@@ -54,7 +62,7 @@ function listJsonFilesRecursive(dir: string): string[] {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       out.push(...listJsonFilesRecursive(full));
-    } else if (entry.isFile() && entry.name.endsWith(".json")) {
+    } else if (entry.isFile() && entry.name.endsWith(".json") && entry.name !== PACKAGE_MAP_FILENAME) {
       out.push(full);
     }
   }
@@ -62,7 +70,8 @@ function listJsonFilesRecursive(dir: string): string[] {
 }
 
 /**
- * Loads every `signatures/**\/*.json` file. `dir` is overridable ONLY so
+ * Loads every `signatures/**\/*.json` file EXCEPT package-map.json (Tier
+ * 1's own data file — see loadPackageMap). `dir` is overridable ONLY so
  * tests (including the privacy test that proves a hostile signature can't
  * escape) can point detection at a fixture directory instead of the real
  * shipped one — production code always uses the default.
@@ -88,6 +97,23 @@ export function loadSignatures(dir: string = DEFAULT_SIGNATURES_DIR): Signature[
 export function loadTaxonomySlugs(path: string = DEFAULT_TAXONOMY_PATH): Set<string> {
   const taxonomy = JSON.parse(readFileSync(path, "utf8")) as { skills: { slug: string }[] };
   return new Set(taxonomy.skills.map((s) => s.slug));
+}
+
+/**
+ * Tier 1's data source (docs/signatures.md): flat package-name -> slug map.
+ * Same override rationale as loadSignatures/loadTaxonomySlugs — production
+ * always uses the shipped default.
+ */
+export function loadPackageMap(path: string = DEFAULT_PACKAGE_MAP_PATH): Map<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    throw new ScanError(`Malformed package map file: ${path}`);
+  }
+  const map = (parsed as { map?: Record<string, string> }).map;
+  if (!map) throw new ScanError(`Package map file missing "map" field: ${path}`);
+  return new Map(Object.entries(map));
 }
 
 function compile(signatures: Signature[], taxonomySlugs: Set<string>): CompiledSignature[] {
@@ -160,17 +186,26 @@ export function fixtureCoverage(sig: Signature, fixture: FixtureCase): PatternCo
 export interface DetectSkillsOptions {
   signaturesDir?: string;
   taxonomyPath?: string;
+  packageMapPath?: string;
 }
 
 /**
- * Deterministic, local skill detection (principle 3, "Bounded output"):
- * matches ADDED lines of the selected author's own commits against
- * signatures/*.json. Zero network, no LLMs. Merge commits are skipped,
- * same as getAllCommits' own numstat (which emits none for them) — no
- * combined-diff handling needed. Files excluded from churn (lockfiles,
- * build output, single-commit generated dumps — src/churn-exclusions.ts)
- * are excluded here too: a vendored bundle's content matching an import
- * pattern would be a false "you wrote this" signal, not a real one.
+ * Deterministic, local, two-tier skill detection (principle 3, "Bounded
+ * output") — see docs/signatures.md. Tier 1: generic import parsing
+ * (src/import-detect.ts) against signatures/package-map.json's flat
+ * package-name -> slug map, for the common case where a bare import
+ * unambiguously identifies the slug. Tier 2: the remaining signatures/*.json
+ * files, for config-file-based tech (no import at all, e.g. Docker) or
+ * usage ambiguous by import alone (e.g. @supabase/supabase-js serves both
+ * auth/supabase-auth and db/supabase — deliberately absent from the map,
+ * disambiguated by API-call shape instead). Zero network, no LLMs.
+ *
+ * Merge commits are skipped, same as getAllCommits' own numstat (which
+ * emits none for them) — no combined-diff handling needed. Files excluded
+ * from churn (lockfiles, build output, single-commit generated dumps —
+ * src/churn-exclusions.ts) are excluded here too, for BOTH tiers: a
+ * vendored dependency's content matching an import pattern would be a
+ * false "you wrote this" signal, not a real one.
  */
 export function detectSkills(
   userCommits: RawCommit[],
@@ -180,10 +215,26 @@ export function detectSkills(
   const signatures = loadSignatures(opts.signaturesDir);
   const taxonomySlugs = loadTaxonomySlugs(opts.taxonomyPath);
   const compiled = compile(signatures, taxonomySlugs);
+  const packageMap = loadPackageMap(opts.packageMapPath);
+  // Same defense-in-depth rationale as compile()'s per-signature check:
+  // enforced inside the function runScan actually calls, not just in a
+  // standalone test, so a future refactor can't silently unwire it.
+  for (const slug of packageMap.values()) {
+    if (!taxonomySlugs.has(slug)) {
+      throw new ScanError(`Package map entry targets slug "${slug}", which is not in taxonomy.json.`);
+    }
+  }
   const generatedPaths = heuristicallyGeneratedPaths(userCommits);
 
   const matchedCommits = new Map<string, Set<string>>();
   const matchedDates = new Map<string, Date[]>();
+  const recordMatch = (slug: string, commit: RawCommit) => {
+    if (matchedCommits.get(slug)?.has(commit.sha)) return;
+    if (!matchedCommits.has(slug)) matchedCommits.set(slug, new Set());
+    matchedCommits.get(slug)!.add(commit.sha);
+    if (!matchedDates.has(slug)) matchedDates.set(slug, []);
+    matchedDates.get(slug)!.push(commit.authorDate);
+  };
 
   for (const commit of userCommits) {
     if (commit.isMerge) continue;
@@ -192,14 +243,17 @@ export function detectSkills(
     );
     if (files.length === 0) continue;
 
+    for (const file of files) {
+      // Tier 1: generic import detection against the flat package map.
+      for (const pkg of extractImportedPackages(file.addedLines, file.path)) {
+        const slug = packageMap.get(pkg);
+        if (slug) recordMatch(slug, commit);
+      }
+    }
+    // Tier 2: config-file/API-usage signatures.
     for (const sig of compiled) {
       if (matchedCommits.get(sig.slug)?.has(commit.sha)) continue;
-      if (files.some((f) => matches(f, sig))) {
-        if (!matchedCommits.has(sig.slug)) matchedCommits.set(sig.slug, new Set());
-        matchedCommits.get(sig.slug)!.add(commit.sha);
-        if (!matchedDates.has(sig.slug)) matchedDates.set(sig.slug, []);
-        matchedDates.get(sig.slug)!.push(commit.authorDate);
-      }
+      if (files.some((f) => matches(f, sig))) recordMatch(sig.slug, commit);
     }
   }
 

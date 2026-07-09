@@ -1,0 +1,22 @@
+{
+  "slug": "db/eloquent",
+  "importPatterns": [
+    "use\\s+Illuminate\\\\Database\\\\Eloquent\\\\Model\\b"
+  ],
+  "apiPatterns": [],
+  "configFilePatterns": [],
+  "fixtures": {
+    "positive": [
+      {
+        "path": "app/Models/Post.php",
+        "diff": "use Illuminate\\Database\\Eloquent\\Model;\n\nclass Post extends Model\n{\n    protected $fillable = ['title'];\n}"
+      }
+    ],
+    "negative": [
+      {
+        "path": "README.md",
+        "diff": "We use Eloquent for most models but this one is a plain PHP class, not extending Model."
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "slug": "db/activerecord",
+  "importPatterns": [],
+  "apiPatterns": [
+    "class\\s+\\w+\\s*<\\s*ApplicationRecord\\b",
+    "class\\s+\\w+\\s*<\\s*ActiveRecord::Base\\b"
+  ],
+  "configFilePatterns": [],
+  "fixtures": {
+    "positive": [
+      { "path": "app/models/user.rb", "diff": "class User < ApplicationRecord\n  has_many :posts\nend" },
+      { "path": "app/models/legacy_post.rb", "diff": "class LegacyPost < ActiveRecord::Base\nend" }
+    ],
+    "negative": [
+      {
+        "path": "README.md",
+        "diff": "We use ActiveRecord for most models but this one talks to an external API instead of a table."
+      }
+    ]
+  }
+}

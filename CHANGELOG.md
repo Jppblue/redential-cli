@@ -7,6 +7,82 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+### Changed
+- **Skill detection refactored to two tiers.** Previously every technology
+  needed its own hand-written `signatures/*.json` regex file (48 of them).
+  Now: **Tier 1** (`src/import-detect.ts` + `signatures/package-map.json`,
+  465 entries) parses import statements across JS/TS, Python, Go, Ruby, and
+  PHP, normalizes to a package name, and looks it up in a flat
+  `{"package": "slug"}` map — for the common case where a bare import
+  unambiguously identifies the technology, no regex needed at all. **Tier 2**
+  (the signature-file format, now 15 files) remains only for what
+  Tier 1 genuinely can't express: config-file-only tech (Docker, Terraform,
+  Kubernetes, GitHub Actions — no import exists), an import shared
+  ambiguously between two slugs (`@supabase/supabase-js` serves both
+  `auth/supabase-auth` and `db/supabase`; `@xenova/transformers` serves both
+  `ai/whisper` and `ai/huggingface`), and inheritance-based detection where
+  the dependency isn't separately declared (Rails' Active Record, Laravel's
+  Eloquent, both bundled with their framework). 37 of the original 48
+  signatures collapsed into map entries (each package already had a real,
+  unambiguous map alias); 4 new Tier 2 signatures were added:
+  `db/activerecord` and `db/eloquent` for the inheritance case;
+  `auth/firebase-auth` because `firebase`/`firebase-admin` are used for
+  Firestore, Storage, and other Firebase products beyond auth — too
+  ambiguous for a flat map entry, so it's detected by its distinctive
+  `auth` sub-import (`firebase/auth`, `firebase-admin/auth`) and API calls
+  (`signInWithEmailAndPassword(`, etc.) instead; and `backend/axum` because
+  Rust isn't one of Tier 1's five supported language families — detected by
+  its `use axum::` import and `axum::Router` API usage instead. `rails`
+  (Ruby gem), `laravel/framework` (composer package), and `illuminate`
+  (the first-segment PHP namespace `use Illuminate\...` resolves to, per
+  the "PHP scope" tradeoff below) were added as ordinary Tier 1 map
+  entries, since all three are unambiguous declared or inherited
+  dependencies. See `docs/signatures.md` for the full design and
+  contribution guide.
+  - `taxonomy.json` extended 48 → 113 slugs (`auth/lucia`, `auth/passport`,
+    `auth/firebase-auth`, `auth/workos`, `auth/devise`; `payments/lemonsqueezy`,
+    `payments/paddle`; ten new `db/*` slugs including `db/sqlalchemy` and
+    `db/gorm` — genuinely missing major ORMs, added per "extended as
+    needed"; nine new `ai/*` slugs (Ollama, Replicate, Groq, Gemini,
+    Cohere, Pinecone, Weaviate, Chroma, Mistral); eight new `frontend/*`,
+    eight new `backend/*`, three new `infra/*`, six new `queues/*`, three
+    new `observability/*`, three new `testing/*`; and three new categories,
+    `email/*`, `storage/*`, `realtime/*`. Version bumped 1.1.0 → 1.2.0
+    (additive; still no bundle schema change — `detected_skills`' shape was
+    already declared).
+  - Closed-vocabulary enforcement now covers Tier 1 too: `detectSkills`
+    throws if any package-map value isn't a `taxonomy.json` member, inside
+    the same call path `runScan` uses (not a standalone check) — same
+    pattern as the existing per-signature check.
+  - **Pattern-quality lessons from the signature-file era carried forward
+    explicitly** (documented in `docs/signatures.md`'s "Pattern discipline"
+    section): a prior review pass found 11 real false positives from
+    generic verbs shared across an ecosystem (`app.get(` misattributing
+    Fastify to Express, `.upsert(` misattributing Prisma to a vector
+    database, `toMatchSnapshot(` misattributing Vitest to Jest, etc.) — the
+    four new Tier 2 signatures and every Tier 1 map entry were written
+    against that same discipline (anchor on the distinctive import
+    specifier; never a generic verb alone).
+  - New tests: `test/import-detect.test.ts` (32 cases — 5 languages ×
+    positive imports, plus mandatory near-miss negatives: comments, plain
+    strings, markdown code blocks, package names inside URLs, all proven
+    NOT to match), `test/package-map.test.ts` (≥400-entry floor, every
+    value is a real taxonomy member, correct slug shape, no duplicate keys
+    — checked against the raw file text, since `JSON.parse` silently drops
+    a literal duplicate key rather than erroring). `test/scan.test.ts`
+    gained a multi-commit aggregation test (`commit_count` counts distinct
+    matching commits correctly across non-consecutive commits) and a
+    performance test (300-commit fixture repo scans in under 30 seconds;
+    measured ~12s).
+  - Re-verified against a real repo (redence): 10 skills detected, all
+    plausible for a Next.js/Supabase/Anthropic/Resend app, including one
+    the old signature-only system never caught at all (`email/resend` — no
+    prior signature existed for it). `frontend/react`'s count dropped from
+    47 to 33 and `frontend/nextjs` rose from 38 to 39 — both are honest
+    consequences of Tier 1 counting fresh imports only, not (as the old
+    signature did) any commit reusing an already-imported hook/subpath
+    without re-adding the import line; not a regression.
+
 ### Added
 - **Skill detection**: `detected_skills` is no longer always `[]` —
   `scan` now matches the selected author's own commits (added diff lines,

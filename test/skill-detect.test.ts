@@ -13,12 +13,14 @@ import {
 const SIGNATURES_DIR = fileURLToPath(new URL("../signatures", import.meta.url));
 const TAXONOMY_PATH = fileURLToPath(new URL("../taxonomy.json", import.meta.url));
 
+// package-map.json is Tier 1's own data file, not a Tier 2 signature —
+// same exclusion as src/skill-detect.ts's listJsonFilesRecursive.
 function listSignatureFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...listSignatureFiles(full));
-    else if (entry.isFile() && entry.name.endsWith(".json")) out.push(full);
+    else if (entry.isFile() && entry.name.endsWith(".json") && entry.name !== "package-map.json") out.push(full);
   }
   return out;
 }

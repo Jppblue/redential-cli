@@ -1,0 +1,24 @@
+{
+  "slug": "backend/axum",
+  "importPatterns": ["\\buse\\s+axum(::|\\s*;)"],
+  "apiPatterns": ["\\baxum::Router\\b"],
+  "configFilePatterns": [],
+  "fixtures": {
+    "positive": [
+      {
+        "path": "src/main.rs",
+        "diff": "use axum::{Router, routing::get};\n\nasync fn handler() -> &'static str {\n    \"hello\"\n}\n\nfn app() -> Router {\n    Router::new().route(\"/\", get(handler))\n}"
+      },
+      {
+        "path": "src/routes.rs",
+        "diff": "let router = axum::Router::new().route(\"/health\", axum::routing::get(health));"
+      }
+    ],
+    "negative": [
+      {
+        "path": "README.md",
+        "diff": "We evaluated axum early on but ended up building the API on Actix instead."
+      }
+    ]
+  }
+}
