@@ -65,6 +65,13 @@ bump, (3) an entry in docs/schema.md and CHANGELOG.md.
   piece. Meant so a non-programmer running the product can re-explain it
   to someone else. This is NOT technical documentation — that always goes
   in docs/ as usual.
+- After every push to `main`, check the CI result (`gh run watch`, or
+  `gh run list`/`gh run view` on the run the push triggered) before
+  considering the milestone closed. "Green locally" does not close a
+  milestone if the matrix is red — CI runs a Windows/macOS/Linux × Node
+  20/22 matrix that local runs don't cover, and cross-platform-only
+  failures (e.g. resource-constrained CI runners exposing timing/load
+  issues local machines don't hit) are real bugs, not noise to ignore.
 
 ## Limits for agents
 
