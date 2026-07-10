@@ -11,7 +11,7 @@
     "categories", "detected_skills", "ownership", "integrity", "attestation"
   ],
   "properties": {
-    "schema_version": { "const": "1.0.0" },
+    "schema_version": { "const": "1.1.0" },
     "runner": { "enum": ["local", "ci"] },
     "tool_version": { "type": "string" },
     "created_at": { "type": "string", "format": "date-time" },
@@ -145,13 +145,31 @@
     "integrity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["merkle_root", "algorithm"],
+      "required": ["merkle_root", "algorithm", "date_forensics"],
       "properties": {
         "merkle_root": {
           "type": "string",
           "description": "Merkle root over the user's commit shas. Enables future re-verification and consistency checks without revealing the shas."
         },
-        "algorithm": { "const": "sha256" }
+        "algorithm": { "const": "sha256" },
+        "date_forensics": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Aggregate rewrite-forensics signal from git's two independent commit dates (author vs. committer). A HEURISTIC signal for server-side scoring only — never a local pass/fail verdict. See docs/schema.md for the measurement contract and expected ranges.",
+          "required": ["author_span_days", "committer_span_days", "mismatch_ratio", "committer_burst_ratio"],
+          "properties": {
+            "author_span_days": { "type": "integer", "minimum": 0 },
+            "committer_span_days": { "type": "integer", "minimum": 0 },
+            "mismatch_ratio": {
+              "type": "number", "minimum": 0, "maximum": 1,
+              "description": "Fraction of the user's commits whose committer date differs from its author date by more than 48h."
+            },
+            "committer_burst_ratio": {
+              "type": "number", "minimum": 0, "maximum": 1,
+              "description": "Fraction of the user's commits whose committer date falls inside the single densest 24h window of committer dates."
+            }
+          }
+        }
       }
     },
     "attestation": {

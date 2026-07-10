@@ -60,9 +60,17 @@ export interface OwnershipInfo {
   user_commit_ratio: number;
 }
 
+export interface DateForensicsInfo {
+  author_span_days: number;
+  committer_span_days: number;
+  mismatch_ratio: number;
+  committer_burst_ratio: number;
+}
+
 export interface IntegrityInfo {
   merkle_root: string;
   algorithm: "sha256";
+  date_forensics: DateForensicsInfo;
 }
 
 export interface AttestationInfo {
@@ -71,7 +79,7 @@ export interface AttestationInfo {
 }
 
 export interface Bundle {
-  schema_version: "1.0.0";
+  schema_version: "1.1.0";
   runner: "local" | "ci";
   tool_version: string;
   created_at: string;

@@ -47,7 +47,7 @@ human-readable summary underneath it:
 
 ```
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "runner": "local",
   "tool_version": "0.1.0",
   "created_at": "2026-07-09T14:32:01.000Z",
@@ -59,7 +59,7 @@ human-readable summary underneath it:
   "categories": [ { "name": "backend", "commit_count": 902, "churn_share": 0.51 }, { "name": "testing", "commit_count": 340, "churn_share": 0.18 } ],
   "detected_skills": [ { "slug": "payments/stripe", "commit_count": 12, "first_seen": "2024-09-01T10:00:00Z", "last_seen": "2025-11-20T18:30:00Z" } ],
   "ownership": { "user_commit_ratio": 0.78 },
-  "integrity": { "merkle_root": "7be2…", "algorithm": "sha256" },
+  "integrity": { "merkle_root": "7be2…", "algorithm": "sha256", "date_forensics": { "author_span_days": 767, "committer_span_days": 763, "mismatch_ratio": 0.06, "committer_burst_ratio": 0.02 } },
   "attestation": { "confirmed": true, "confirmed_at": "2026-07-09T14:32:01.000Z" }
 }
 
@@ -152,8 +152,13 @@ local data is explicitly the *weakest* tier, not the strongest. A replayed
 history still has to survive several partial anchors: signed commits (a
 GPG/SSH signature can't be forged retroactively without the key), a
 behavioral fingerprint (the hour/weekday cadence is compared against your
-own verified public activity as a soft consistency check), and — above
-all — the bundle only ever earns **Attested**, metadata only. Anything
+own verified public activity as a soft consistency check), a rewrite-
+forensics signal (`integrity.date_forensics` — git's author date is easy to
+forge, but a script replaying years of fabricated history in one sitting
+also leaves every commit's *committer* date clustered in that same
+sitting; a heuristic server-side signal, not a local verdict — see
+[docs/schema.md](docs/schema.md#date_forensics-measurement-contract)), and
+— above all — the bundle only ever earns **Attested**, metadata only. Anything
 above that requires an NDA-safe defense: a short recorded session where
 you answer questions generated from your own bundle, live. Faking a git
 history is cheap; defending fabricated experience under questioning, in

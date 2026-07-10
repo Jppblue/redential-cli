@@ -16,7 +16,7 @@ import { detectSkills, type DetectSkillsOptions } from "./skill-detect.js";
 import { assertNoSecrets } from "./secret-scan.js";
 import { parseSince } from "./since.js";
 import { debugLog } from "./debug.js";
-import type { Bundle, CategoryName, LanguageShare, CategoryShare } from "./types.js";
+import type { Bundle, CategoryName, LanguageShare, CategoryShare, DateForensicsInfo } from "./types.js";
 
 export { ScanError } from "./errors.js";
 import { ScanError } from "./errors.js";
@@ -139,8 +139,10 @@ export async function runScan(opts: ScanOptions): Promise<Bundle> {
   const detectedSkills = await detectSkills(userCommits, opts.repoPath, opts.skillDetectOptions);
   debugLog(`skill detection: ${detectedSkills.length} skills matched in ${Date.now() - skillsStart}ms`);
 
+  const dateForensics = computeDateForensics(userCommits);
+
   const bundle: Bundle = {
-    schema_version: "1.0.0",
+    schema_version: "1.1.0",
     runner: "local",
     tool_version: opts.toolVersion,
     created_at: now.toISOString(),
@@ -162,7 +164,11 @@ export async function runScan(opts: ScanOptions): Promise<Bundle> {
     categories,
     detected_skills: detectedSkills,
     ownership: { user_commit_ratio: userCommits.length / allCommits.length },
-    integrity: { merkle_root: merkleRoot(userCommits.map((c) => c.sha)), algorithm: "sha256" },
+    integrity: {
+      merkle_root: merkleRoot(userCommits.map((c) => c.sha)),
+      algorithm: "sha256",
+      date_forensics: dateForensics,
+    },
     attestation: { authorized_confirmation: true, confirmed_at: now.toISOString() },
   };
 
@@ -173,6 +179,68 @@ export async function runScan(opts: ScanOptions): Promise<Bundle> {
   assertNoSecrets(JSON.stringify(bundle));
 
   return bundle;
+}
+
+const MISMATCH_THRESHOLD_MS = 48 * 60 * 60 * 1000;
+const BURST_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Rewrite-forensics aggregates from git's two independent dates — see
+ * docs/schema.md's `integrity.date_forensics` section for the full
+ * measurement contract, expected ranges, and the "heuristic, never a local
+ * verdict" caveat. Computed over the same `userCommits` population as
+ * `commits.*`/the histograms above (merges included, `--since`-windowed the
+ * same way) — no new commit population, only a second date read per commit
+ * already being read anyway.
+ *
+ * Min/max are computed with an explicit loop rather than `Math.max(...arr)`
+ * — spreading tens of thousands of arguments into `Math.max` risks blowing
+ * the engine's call-argument limit on the huge-repo fixtures this codebase
+ * already tests against (see test/slow/huge-repo.test.ts).
+ */
+function computeDateForensics(userCommits: RawCommit[]): DateForensicsInfo {
+  let minAuthor = Infinity;
+  let maxAuthor = -Infinity;
+  let minCommitter = Infinity;
+  let maxCommitter = -Infinity;
+  let mismatchCount = 0;
+  const committerTimes: number[] = [];
+
+  for (const c of userCommits) {
+    const authorMs = c.authorDate.getTime();
+    const committerMs = c.committerDate.getTime();
+    if (authorMs < minAuthor) minAuthor = authorMs;
+    if (authorMs > maxAuthor) maxAuthor = authorMs;
+    if (committerMs < minCommitter) minCommitter = committerMs;
+    if (committerMs > maxCommitter) maxCommitter = committerMs;
+    if (Math.abs(committerMs - authorMs) > MISMATCH_THRESHOLD_MS) mismatchCount++;
+    committerTimes.push(committerMs);
+  }
+
+  return {
+    author_span_days: Math.floor((maxAuthor - minAuthor) / MS_PER_DAY),
+    committer_span_days: Math.floor((maxCommitter - minCommitter) / MS_PER_DAY),
+    mismatch_ratio: mismatchCount / userCommits.length,
+    committer_burst_ratio: maxCommitsInWindow(committerTimes, BURST_WINDOW_MS) / userCommits.length,
+  };
+}
+
+/**
+ * Largest number of `times` (epoch ms) that fall inside any single window
+ * of `windowMs` width — a sorted two-pointer sweep, O(n log n) overall.
+ * Used to find the densest 24h cluster of committer dates without holding
+ * every pairwise gap in memory.
+ */
+function maxCommitsInWindow(times: number[], windowMs: number): number {
+  const sorted = [...times].sort((a, b) => a - b);
+  let left = 0;
+  let best = 0;
+  for (let right = 0; right < sorted.length; right++) {
+    while (sorted[right] - sorted[left] > windowMs) left++;
+    const count = right - left + 1;
+    if (count > best) best = count;
+  }
+  return best;
 }
 
 function computeChurnBreakdown(userCommits: RawCommit[]): {

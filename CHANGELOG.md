@@ -8,6 +8,34 @@ always bump at least minor; breaking schema changes bump major.
 ## [Unreleased]
 
 ### Added
+- **Rewrite-forensics signal: `integrity.date_forensics` (schema `1.0.0` →
+  `1.1.0`, minor/additive).** `getAllCommits` now also reads each commit's
+  committer date (`%cI`, alongside the existing author date `%aI`) —
+  distinct from the author date because a rebase, `filter-branch`, amend,
+  or squash-merge platform rewrites the committer date while leaving the
+  author date untouched. Four new aggregate fields, no per-commit dates:
+  `author_span_days`/`committer_span_days` (max−min, in days, computed
+  independently per date), `mismatch_ratio` (fraction of the user's commits
+  whose committer date differs from its own author date by >48h), and
+  `committer_burst_ratio` (fraction of the user's commits whose committer
+  date falls inside the single densest 24h window). A script that replays
+  years of fabricated history in one sitting (the scenario the README
+  FAQ's "can't I replay someone else's git history" answer already
+  addresses) can forge author dates freely, but its committer dates all
+  land in that one sitting — large `author_span_days`, near-zero
+  `committer_span_days`, both ratios near `1.0`, together. Documented as a
+  **heuristic signal for server-side scoring only** — `scan`/`submit` never
+  fail, warn, or block on these values, and two known non-incriminating
+  shapes (a genuinely young/short-window repo degenerately bursts; ordinary
+  squash-merge workflows routinely mismatch) are called out explicitly so
+  the fields are read jointly, never thresholded alone. See
+  [docs/schema.md](docs/schema.md#date_forensics-measurement-contract) for
+  the full measurement contract and the README FAQ for the user-facing
+  version. The wrapped terminal summary does not display this field — it's
+  for server-side scoring, not for surfacing messy rebase habits locally.
+  Prior-discussion issue:
+  [#1](https://github.com/Jppblue/redential-cli/issues/1) (CLAUDE.md
+  requires one for any change to what data leaves the machine).
 - **Launch-polish batch: shallow-clone detection, author pre-selection,
   `redential status`, and `--debug`.**
   - **Shallow-clone detection.** `scan`/`submit` warn (never block) when

@@ -9,7 +9,7 @@ false` everywhere — unknown fields are invalid by design).
 
 | Field | What | Why |
 |---|---|---|
-| `schema_version` | `"1.0.0"` | The schema is the trust contract; the version pins it |
+| `schema_version` | `"1.1.0"` | The schema is the trust contract; the version pins it |
 | `runner` | `local` \| `ci` | Local scans are user-controlled (weakest tier). CI scans (future) run in employer infrastructure and can carry an OIDC anchor |
 | `tool_version` | CLI version | Reproducibility of the analysis |
 | `created_at` | Scan timestamp | Freshness |
@@ -156,6 +156,80 @@ above), same as `identity.other_contributors_count`.
 `merkle_root` over the user's commit shas (sha256). Enables future
 re-verification ("does today's repo state still contain the commits you
 attested last year?") without revealing a single sha.
+
+### `date_forensics` (measurement contract)
+
+Every git commit carries two independent dates: the **author date** (when
+the change was originally written — this is what `commits.first_at`,
+`last_at`, and the hour/weekday histograms above are all built from) and
+the **committer date** (when the commit object currently in the repo was
+actually written — set to the author date on an ordinary `git commit`, but
+left untouched by an amend, rebase, `filter-branch`, or cherry-pick, and
+set to merge time by most platforms' squash-merge). Everything above this
+subsection is author-date only; `date_forensics` is the first (and only)
+place a committer date reaches the bundle, and only as four aggregates —
+never a per-commit value:
+
+```json
+"date_forensics": {
+  "author_span_days": 1140,
+  "committer_span_days": 0,
+  "mismatch_ratio": 0.95,
+  "committer_burst_ratio": 1.0
+}
+```
+
+- `author_span_days` / `committer_span_days` — `max - min` (days) over the
+  user's commits, computed independently for each date. Same population as
+  `commits.*` (merges included, `--since`-windowed the same way — see the
+  `--since` note under `commits` above; `date_forensics` is computed over
+  the walked window, not full history, exactly like every other
+  window-scoped field).
+- `mismatch_ratio` — fraction of the user's commits whose committer date
+  differs from its own author date by more than 48h.
+- `committer_burst_ratio` — fraction of the user's commits whose committer
+  date falls inside the single densest 24h window of committer dates
+  (a sliding-window max, not a fixed calendar day).
+
+**Why it exists.** A replayed history — fabricate commit timestamps in a
+fresh repo, the scenario the README FAQ's "can't I replay someone else's
+git history" answer already addresses — can forge author dates freely, but
+a naive replay script (rewrite years of fabricated history in one sitting)
+leaves a second, independent signature: the fabricated author dates still
+span years, while the committer dates — the actual moment each commit
+object was written to disk — collapse into the single sitting the script
+ran in. That shows up as large `author_span_days`, near-zero
+`committer_span_days`, and both ratios near `1.0`, together.
+
+**What "normal" looks like.** An organic history has committer dates that
+track author dates closely (`mismatch_ratio` near 0, occasional rebases
+nudge it up) and a `committer_span_days` that tracks `author_span_days`
+(both reflect the same real elapsed time), so `committer_burst_ratio`
+reflects ordinary commit cadence — well below `1.0` for any history longer
+than about a day.
+
+**Known non-incriminating shapes — these fields must be read jointly, never
+threshold in isolation:**
+
+- `committer_burst_ratio` is *degenerately* near `1.0` for any repo whose
+  entire walked history genuinely fits inside ~24h — a brand-new repo, a
+  hackathon project, or a narrow `--since` window. It's only meaningful
+  conditioned on `author_span_days` also being large; a small
+  `author_span_days` alongside a high burst ratio just means "young/short
+  history", not a replay.
+- `mismatch_ratio` fires routinely on ordinary squash-merge and
+  long-lived-PR workflows, since the merging platform sets the committer
+  date to merge time regardless of when the change was authored. A high
+  `mismatch_ratio` alone is not incriminating — the replay signature is
+  high `mismatch_ratio` **and** large `author_span_days` **and**
+  near-zero `committer_span_days`, all three together.
+
+**This is a HEURISTIC signal for server-side scoring, not a local
+verdict.** `scan`/`submit` never fail, warn, or block based on these
+values — the CLI computes and reports them, exactly as it does every other
+`integrity`/`commits` field, and makes no judgment. Scoring what a given
+combination of values means is entirely a server-side decision outside
+this repo.
 
 ## `attestation`
 

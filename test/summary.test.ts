@@ -11,7 +11,7 @@ function stripAnsi(text: string): string {
 
 function baseBundle(overrides: Partial<Bundle> = {}): Bundle {
   return {
-    schema_version: "1.0.0",
+    schema_version: "1.1.0",
     runner: "local",
     tool_version: "0.1.0",
     created_at: "2026-07-09T00:00:00.000Z",
@@ -43,7 +43,11 @@ function baseBundle(overrides: Partial<Bundle> = {}): Bundle {
       { slug: "auth/clerk", commit_count: 6, first_seen: "2024-03-01", last_seen: "2025-01-01" },
     ],
     ownership: { user_commit_ratio: 0.78 },
-    integrity: { merkle_root: "0".repeat(64), algorithm: "sha256" },
+    integrity: {
+      merkle_root: "0".repeat(64),
+      algorithm: "sha256",
+      date_forensics: { author_span_days: 900, committer_span_days: 895, mismatch_ratio: 0.05, committer_burst_ratio: 0.03 },
+    },
     attestation: { authorized_confirmation: true, confirmed_at: "2026-07-09T00:00:00.000Z" },
     ...overrides,
   };

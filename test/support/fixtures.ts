@@ -10,6 +10,11 @@ export interface CommitSpec {
   files: Record<string, string>;
   sign?: boolean;
   authorDate?: string;
+  // Independent of authorDate — for date-forensics fixtures (a real rebase/
+  // replay changes the committer date while leaving the author date
+  // untouched). Omitted: defaults to authorDate (existing behavior, both
+  // dates equal — an ordinary, never-rewritten commit).
+  committerDate?: string;
 }
 
 function run(cwd: string, args: string[], env?: Record<string, string>): string {
@@ -47,8 +52,10 @@ export function commit(dir: string, spec: CommitSpec): string {
     GIT_COMMITTER_NAME: spec.authorName,
     GIT_COMMITTER_EMAIL: spec.authorEmail,
   };
-  if (spec.authorDate) {
-    env.GIT_AUTHOR_DATE = spec.authorDate;
+  if (spec.authorDate) env.GIT_AUTHOR_DATE = spec.authorDate;
+  if (spec.committerDate) {
+    env.GIT_COMMITTER_DATE = spec.committerDate;
+  } else if (spec.authorDate) {
     env.GIT_COMMITTER_DATE = spec.authorDate;
   }
 

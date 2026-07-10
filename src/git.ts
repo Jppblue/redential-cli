@@ -12,6 +12,14 @@ export interface RawCommit {
   sha: string;
   email: string;
   authorDate: Date;
+  // Distinct from authorDate: the date the commit object was actually
+  // written (rewritten by a rebase/`filter-branch`/`commit --amend`, set to
+  // merge time by a squash-merge platform, etc.), whereas authorDate is
+  // carried over unchanged by all of those. The gap between the two is
+  // date_forensics' whole signal (see scan.ts's computeDateForensics and
+  // docs/schema.md's `integrity.date_forensics` section) — never displayed
+  // on its own, never a per-commit value in the bundle.
+  committerDate: Date;
   signed: boolean;
   churn: FileChurn[];
   // 2+ parents. `--numstat` already emits no per-file churn for merges (so
@@ -45,7 +53,7 @@ const EMPTY_REPO_PATTERN = /does not have any commits yet|bad default revision/;
 
 function parseCommitRecord(record: string): RawCommit {
   const lines = record.split("\n");
-  const [sha, email, authorDateIso, signatureStatus, parents] = lines[0].split(FIELD_SEP);
+  const [sha, email, authorDateIso, committerDateIso, signatureStatus, parents] = lines[0].split(FIELD_SEP);
   const churn: FileChurn[] = [];
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -63,6 +71,7 @@ function parseCommitRecord(record: string): RawCommit {
     sha,
     email,
     authorDate: new Date(authorDateIso),
+    committerDate: new Date(committerDateIso),
     // Only a fully verified good signature ("G") counts as signed. "U"
     // (good but untrusted/unmatched key), "B" (bad), "X"/"Y"/"R"
     // (expired/expired-key/revoked-key) and "E" (can't check) all mean
@@ -106,7 +115,7 @@ export function getAllCommits(repoPath: string, opts: GetAllCommitsOptions = {})
     "log",
     "--reverse",
     "--numstat",
-    `--format=${RECORD_SEP}%H${FIELD_SEP}%ae${FIELD_SEP}%aI${FIELD_SEP}%G?${FIELD_SEP}%P`,
+    `--format=${RECORD_SEP}%H${FIELD_SEP}%ae${FIELD_SEP}%aI${FIELD_SEP}%cI${FIELD_SEP}%G?${FIELD_SEP}%P`,
   ];
   if (opts.since) args.push(`--since=${opts.since.toISOString()}`);
   // Format string omitted — it's noisy separator bytes, not useful signal.

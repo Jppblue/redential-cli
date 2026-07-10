@@ -76,7 +76,7 @@ how it's drawn.
 
 ```
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   ...
 }
 
@@ -206,8 +206,9 @@ redential scan --since 2024-01-01
 This does **not** add any new field to the bundle. It changes which
 commits the existing fields are computed over: `commits.user_total`,
 `first_at`/`last_at`/`span_days`, the hour/weekday histograms,
-`identity.other_contributors_count`, and `ownership.user_commit_ratio` all
-simply reflect the analyzed window instead of full history — see
+`identity.other_contributors_count`, `ownership.user_commit_ratio`, and
+`integrity.date_forensics` all simply reflect the analyzed window instead
+of full history — see
 [docs/schema.md](schema.md#commits) for the exact field-by-field
 breakdown. This is strictly narrower disclosure than a full scan, never a
 way to fabricate or hide history: a windowed scan can only ever show

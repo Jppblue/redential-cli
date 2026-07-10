@@ -102,7 +102,7 @@ describe("scan continues after a known-public-host warning (never blocks)", () =
     const bundleLine = logs.find((line) => line.trim().startsWith("{"));
     expect(bundleLine).toBeDefined();
     const bundle = JSON.parse(bundleLine!);
-    expect(bundle.schema_version).toBe("1.0.0");
+    expect(bundle.schema_version).toBe("1.1.0");
     expect(bundle.commits.user_total).toBe(1);
   });
 

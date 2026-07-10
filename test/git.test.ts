@@ -175,6 +175,41 @@ describe("getAllCommits — since window and progress", () => {
   });
 });
 
+describe("getAllCommits — committer date", () => {
+  it("defaults committerDate to authorDate when the commit was never rewritten", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    commit(dir, {
+      message: "x",
+      authorName: "You",
+      authorEmail: "you@example.com",
+      files: { "a.ts": "1\n" },
+      authorDate: "2024-01-01T00:00:00Z",
+    });
+
+    const [c] = await getAllCommits(dir);
+    expect(c.authorDate.toISOString()).toBe("2024-01-01T00:00:00.000Z");
+    expect(c.committerDate.toISOString()).toBe("2024-01-01T00:00:00.000Z");
+  });
+
+  it("reads committerDate independently from authorDate when the fixture sets them separately", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    commit(dir, {
+      message: "x",
+      authorName: "You",
+      authorEmail: "you@example.com",
+      files: { "a.ts": "1\n" },
+      authorDate: "2021-03-15T00:00:00Z",
+      committerDate: "2026-07-10T10:00:00Z",
+    });
+
+    const [c] = await getAllCommits(dir);
+    expect(c.authorDate.toISOString()).toBe("2021-03-15T00:00:00.000Z");
+    expect(c.committerDate.toISOString()).toBe("2026-07-10T10:00:00.000Z");
+  });
+});
+
 describe("isShallowRepository", () => {
   it("is false for an ordinary full clone", () => {
     const dir = createRepo();
