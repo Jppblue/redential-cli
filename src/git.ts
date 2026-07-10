@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { debugLog } from "./debug.js";
 import type { RepoInfo } from "./types.js";
 
 export interface FileChurn {
@@ -20,6 +21,9 @@ export interface RawCommit {
 }
 
 function git(repoPath: string, args: string[]): string {
+  // argv only — NEVER repoPath/cwd (would reveal an employer/project name
+  // if pasted into a public issue) and never the command's own output.
+  debugLog(`git ${args.join(" ")}`);
   return execFileSync("git", args, {
     cwd: repoPath,
     encoding: "utf8",
@@ -105,6 +109,8 @@ export function getAllCommits(repoPath: string, opts: GetAllCommitsOptions = {})
     `--format=${RECORD_SEP}%H${FIELD_SEP}%ae${FIELD_SEP}%aI${FIELD_SEP}%G?${FIELD_SEP}%P`,
   ];
   if (opts.since) args.push(`--since=${opts.since.toISOString()}`);
+  // Format string omitted — it's noisy separator bytes, not useful signal.
+  debugLog(`git log --reverse --numstat${opts.since ? ` --since=${opts.since.toISOString()}` : ""} (streaming)`);
 
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, { cwd: repoPath, stdio: ["ignore", "pipe", "pipe"] });
@@ -215,6 +221,41 @@ export function getRemoteHostType(repoPath: string): RepoInfo["host_type"] {
   return "other";
 }
 
+/**
+ * True for a shallow clone (`--depth N`) — history before the shallow
+ * boundary simply doesn't exist locally, which would silently understate
+ * `repo.age_days`, span, and commit counts with no indication why. Never a
+ * reason to block scanning (same "warn, never block" stance as
+ * publicHostWarning) — just something the user should know about. Fails
+ * open (false) on any error, matching every other git.ts boolean-ish
+ * probe: an inconclusive read must never look like "definitely not
+ * shallow" being asserted with confidence it doesn't have, but blocking
+ * scan on an advisory check would be worse than a missed warning.
+ */
+export function isShallowRepository(repoPath: string): boolean {
+  try {
+    return git(repoPath, ["rev-parse", "--is-shallow-repository"]).trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The effective (local-overriding-global) `git config user.email` — used
+ * ONLY to pre-select a candidate author identity already returned by
+ * `listAuthors` (build-bundle.ts); never trusted as an authorization
+ * signal by itself (the existing confirm-attestation step still applies
+ * regardless of how the author was chosen). Null if unset or unreadable.
+ */
+export function getConfiguredUserEmail(repoPath: string): string | null {
+  try {
+    const email = git(repoPath, ["config", "user.email"]).trim();
+    return email.length > 0 ? email : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface AddedLines {
   path: string;
   addedLines: string;
@@ -321,6 +362,7 @@ export function getCommitsAddedLines(repoPath: string, shas: string[]): Promise<
     "--no-color",
     "--no-ext-diff",
   ];
+  debugLog(`git show <${shas.length} shas> --unified=0 (batched diff fetch)`);
 
   return new Promise((resolve) => {
     const child = spawn("git", args, { cwd: repoPath, stdio: ["ignore", "pipe", "pipe"] });

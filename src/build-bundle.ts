@@ -1,8 +1,9 @@
 import { runScan, listAuthors, type AuthorCandidate } from "./scan.js";
 import { ScanError } from "./errors.js";
-import { promptAuthors, promptConfirmAttestation } from "./prompt.js";
-import { getRemoteUrl } from "./git.js";
+import { promptAuthors, promptConfirmAttestation, promptUseGitIdentity } from "./prompt.js";
+import { getConfiguredUserEmail, getRemoteUrl, isShallowRepository } from "./git.js";
 import { publicHostWarning } from "./public-remote.js";
+import { shallowRepoWarning } from "./shallow-repo.js";
 import type { Bundle } from "./types.js";
 
 export interface BuildBundleOptions {
@@ -14,6 +15,10 @@ export interface BuildBundleOptions {
   // Injectable for tests; defaults to the real interactive prompts.
   promptAuthorsFn?: (candidates: AuthorCandidate[]) => Promise<string[]>;
   promptConfirmFn?: () => Promise<boolean>;
+  // Injectable for tests; defaults to the real interactive prompt. Only
+  // ever called when `git config user.email` matches one of 2+ candidates
+  // — see the "author pre-selection" comment below.
+  promptUseGitIdentityFn?: (candidate: AuthorCandidate) => Promise<boolean>;
   warn?: (message: string) => void;
   // Raw --since spec, forwarded to runScan (src/since.ts parses it). See
   // scan-command.ts / docs/scan.md for the CLI-facing behavior.
@@ -32,8 +37,9 @@ export interface BuildBundleOptions {
 export async function buildBundleInteractively(opts: BuildBundleOptions): Promise<Bundle> {
   const warn = opts.warn ?? console.error;
 
-  const warning = publicHostWarning(getRemoteUrl(opts.repoPath));
-  if (warning) warn(warning);
+  const publicHostNote = publicHostWarning(getRemoteUrl(opts.repoPath));
+  if (publicHostNote) warn(publicHostNote);
+  if (isShallowRepository(opts.repoPath)) warn(shallowRepoWarning());
 
   let authors = opts.author;
   if (authors.length === 0) {
@@ -41,7 +47,31 @@ export async function buildBundleInteractively(opts: BuildBundleOptions): Promis
     if (candidates.length === 0) {
       throw new ScanError("This repository has no commits yet — nothing to scan.");
     }
-    authors = await (opts.promptAuthorsFn ?? promptAuthors)(candidates);
+
+    // Author pre-selection: with 2+ candidates, offer the repo's own git
+    // identity as a fast default BEFORE the full list — most repos have
+    // one obvious "you". A single candidate already gets its own Y/n
+    // confirmation inside promptAuthors below; asking the same question
+    // twice in a row would be redundant, so this only fires for 2+.
+    // Declining, or no match at all, falls through to the FULL,
+    // unmodified list — never silently dropping the matched entry, since
+    // "no" often means "that one plus others" for a multi-identity repo.
+    let preselected = false;
+    if (candidates.length > 1) {
+      const gitEmail = getConfiguredUserEmail(opts.repoPath);
+      const matched = gitEmail ? candidates.find((c) => c.email === gitEmail) : undefined;
+      if (matched) {
+        const useIt = await (opts.promptUseGitIdentityFn ?? promptUseGitIdentity)(matched);
+        if (useIt) {
+          authors = [matched.email];
+          preselected = true;
+        }
+      }
+    }
+
+    if (!preselected) {
+      authors = await (opts.promptAuthorsFn ?? promptAuthors)(candidates);
+    }
   }
 
   let confirmed = opts.yes;

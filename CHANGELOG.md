@@ -8,6 +8,37 @@ always bump at least minor; breaking schema changes bump major.
 ## [Unreleased]
 
 ### Added
+- **Launch-polish batch: shallow-clone detection, author pre-selection,
+  `redential status`, and `--debug`.**
+  - **Shallow-clone detection.** `scan`/`submit` warn (never block) when
+    the repo is a shallow clone (`git rev-parse
+    --is-shallow-repository`), naming the `git fetch --unshallow` remedy
+    — history before the shallow boundary is entirely absent locally, so
+    commit counts/span/age would otherwise silently understate real
+    activity. The TTY wrapped summary repeats a short note. See
+    [docs/scan.md](docs/scan.md#shallow-clones).
+  - **Author pre-selection from your git identity.** When `git config
+    user.email` matches one of 2+ candidate authors, it's offered first
+    as a fast Y/n default ("Found your git identity: ... Use it?")
+    before the existing list/single-candidate flows — which run
+    unchanged on decline, no match, a single candidate (avoids asking
+    the same yes/no question twice), or when `--author` is passed. See
+    [docs/scan.md](docs/scan.md#how-it-works).
+  - **New `redential status` command.** Read-only, zero network, works
+    logged out: CLI version, config dir, login state + site_url, and the
+    last submission on record (timestamp, plus 12-hex-char prefixes of
+    the bundle hash and repo fingerprint — never the full values). Adds
+    an optional `repo_fingerprint` field to the local
+    `last-submission.json` record (never leaves the machine; the value
+    is already inside the bundle `submit` uploads). See
+    [docs/login-submit.md](docs/login-submit.md#status-local-state-read-only).
+  - **`--debug` global flag.** Verbose diagnostics to stderr only (git
+    commands run — argv only, never the repo path or diff content;
+    phase timings; commit/batch counts). Piped stdout stays
+    byte-identical; a privacy test
+    (`test/privacy/debug-output.test.ts`) asserts the session token and
+    bundle field values can never appear in `--debug` output. See
+    [docs/scan.md](docs/scan.md#--debug).
 - **Skill detection now covers Rust, Java, Kotlin, C#, and Swift.**
   `src/import-detect.ts` gains five new Tier 1 extractors, same
   architecture as the existing JS/Python/Go/Ruby/PHP ones (regex-based, no

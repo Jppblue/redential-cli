@@ -161,6 +161,23 @@ export function createRepoWithGeneratedHistory(commitCount: number): string {
   return dir;
 }
 
+/**
+ * A shallow clone (`--depth 1`) of `sourceDir` — for shallow-clone
+ * detection tests. Clones over a `file://` URL rather than a plain path so
+ * this works identically to a real remote clone (git's `--depth`
+ * machinery is URL-protocol-driven); `sourceDir` needs at least 2 commits
+ * for the clone to be meaningfully shallow (missing real history), not
+ * just trivially depth-1-of-1.
+ */
+export function createShallowClone(sourceDir: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "redential-shallow-"));
+  execFileSync("git", ["clone", "-q", "--depth", "1", `file://${sourceDir}`, dir], {
+    encoding: "utf8",
+  });
+  run(dir, ["config", "core.autocrlf", "false"]);
+  return dir;
+}
+
 export function cleanup(dir: string): void {
   // maxRetries/retryDelay: on Windows, a just-closed git process or an
   // antivirus scanner can hold a brief file lock after this function is

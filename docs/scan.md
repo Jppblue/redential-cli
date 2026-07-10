@@ -8,6 +8,7 @@ redential scan --repo <path>              # interactive author + confirmation
 redential scan --author you@example.com --yes   # non-interactive
 redential scan --repo <path> --json       # force JSON-only, even in a terminal
 redential scan --since 2years             # limit analysis to the last 2 years
+redential scan --debug --repo <path>      # verbose diagnostics on stderr
 ```
 
 ## How it works
@@ -15,12 +16,21 @@ redential scan --since 2years             # limit analysis to the last 2 years
 1. **Enumerate authors.** `git log` is read locally (`git show`/`git diff`
    never leave the machine) to list distinct author emails and their commit
    counts.
-2. **Select identity.** With a single candidate, a Y/n confirmation ("Found
-   1 identity: you@example.com (12 commits). Is this you? (Y/n)", Y is the
-   default — pressing Enter accepts). With 2+ candidates, a numbered list
-   instead — there's no single obvious default to pick for those.
+2. **Select identity.** With 2+ candidates, and the repo's own
+   `git config user.email` matching one of them, that one is offered FIRST
+   as a fast default: "Found your git identity: you@example.com (12
+   commits). Use it? (Y/n)", Y is the default. Declining — or no match at
+   all — falls through unchanged to the flow below: a single candidate
+   gets its own Y/n confirmation ("Found 1 identity: you@example.com (12
+   commits). Is this you? (Y/n)"); 2+ candidates get a numbered list
+   instead (skipping the git-identity pre-selection specifically to avoid
+   asking the same yes/no question twice in a row for a repo with exactly
+   one contributor). Declining the git-identity pre-selection shows the
+   FULL list, including the declined entry — "no" often means "that one
+   plus others" for a multi-identity repo, not "not that one at all".
    Non-interactively, pass `--author <email>` (repeatable) for every email
-   that's yours.
+   that's yours — this skips identity selection entirely, unaffected by
+   any of the above.
 3. **Confirm authorization.** You must explicitly confirm "I am authorized
    to analyze this repository" — interactively via a prompt, or
    non-interactively via `--yes`. This is a separate step from author
@@ -214,6 +224,48 @@ If `--since` excludes every commit in the repo (but the repo isn't
 actually empty), `scan` fails with a message naming the window rather than
 the generic "no commits yet" error, so it's clear the fix is to widen or
 drop `--since`, not that the repo has no history at all.
+
+## Shallow clones
+
+`git rev-parse --is-shallow-repository` is checked once per scan
+(`src/git.ts`'s `isShallowRepository`). A shallow clone (`git clone
+--depth N`, or the default checkout depth of most CI actions) is missing
+history before its shallow boundary ENTIRELY — not filtered out like
+`--since`, genuinely absent locally — so `commits.user_total`, span, and
+`repo.age_days` would all silently understate real activity with no
+indication why. `scan`/`submit` print a warning (same "warn, never block"
+stance as the public-host note above) naming the remedy (`git fetch
+--unshallow`) and continue with whatever history IS available; on a TTY,
+the wrapped summary repeats a short note next to the span line too, so
+it's visible even if the stderr warning scrolled past.
+
+## `--debug`
+
+```bash
+redential scan --debug --repo <path>
+redential --debug scan --repo <path>   # either position works
+```
+
+A global flag (works on every command). Writes verbose diagnostics to
+**stderr only** — git commands run (argv only: shas, dates, flags — never
+the repo path, which would reveal an employer/project name if pasted into
+a public issue; never diff content or an author's email), phase timings
+(commit walk, skill detection), and counts (commits walked, commits
+matching the selected author, diff-fetch batches). Piped/redirected
+stdout is completely unaffected — `scan --debug | jq` prints
+byte-identical JSON to `scan | jq`, covered by a test
+(`test/privacy/debug-output.test.ts`), which also asserts the stored
+session token and bundle field values (fingerprints, hashes) can never
+appear in `--debug` output, even if a future debugLog call got careless
+about what it logs.
+
+Implementation note: `src/debug.ts` is module-level mutable state — the
+one deliberate exception to this codebase's everywhere-dependency-
+injection style (every other cross-cutting concern is threaded explicitly
+through an options object). Full DI would mean a `debugLog` parameter on
+essentially every function in `git.ts`/`scan.ts`/`skill-detect.ts`; a
+settable verbose-flag toggle is the standard CLI idiom instead (cf.
+Node's own `util.debuglog`).
 
 ## Design notes
 

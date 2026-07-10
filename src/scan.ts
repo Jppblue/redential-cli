@@ -15,6 +15,7 @@ import { isExcludedPath, heuristicallyGeneratedPaths } from "./churn-exclusions.
 import { detectSkills, type DetectSkillsOptions } from "./skill-detect.js";
 import { assertNoSecrets } from "./secret-scan.js";
 import { parseSince } from "./since.js";
+import { debugLog } from "./debug.js";
 import type { Bundle, CategoryName, LanguageShare, CategoryShare } from "./types.js";
 
 export { ScanError } from "./errors.js";
@@ -83,10 +84,12 @@ export async function runScan(opts: ScanOptions): Promise<Bundle> {
   const sinceDate = opts.since !== undefined ? parseSince(opts.since, now) : undefined;
 
   const total = getCommitCount(opts.repoPath, sinceDate);
+  const walkStart = Date.now();
   const allCommits = await getAllCommits(opts.repoPath, {
     since: sinceDate,
     onProgress: opts.onProgress ? (scanned) => opts.onProgress!(scanned, total) : undefined,
   });
+  debugLog(`commit walk: ${allCommits.length} commits in ${Date.now() - walkStart}ms`);
   if (allCommits.length === 0) {
     if (sinceDate && getCommitCount(opts.repoPath) > 0) {
       throw new ScanError(
@@ -101,6 +104,7 @@ export async function runScan(opts: ScanOptions): Promise<Bundle> {
   if (userCommits.length === 0) {
     throw new ScanError(`No commits found for the selected author(s): ${opts.authors.join(", ")}`);
   }
+  debugLog(`author filter: ${userCommits.length}/${allCommits.length} commits match the selected author(s)`);
 
   const distinctAuthors = new Set(allCommits.map((c) => c.email));
   const otherContributorsCount = [...distinctAuthors].filter((e) => !authorSet.has(e)).length;
@@ -131,7 +135,9 @@ export async function runScan(opts: ScanOptions): Promise<Bundle> {
   const signedCount = userCommits.filter((c) => c.signed).length;
 
   const { languages, categories } = computeChurnBreakdown(userCommits);
+  const skillsStart = Date.now();
   const detectedSkills = await detectSkills(userCommits, opts.repoPath, opts.skillDetectOptions);
+  debugLog(`skill detection: ${detectedSkills.length} skills matched in ${Date.now() - skillsStart}ms`);
 
   const bundle: Bundle = {
     schema_version: "1.0.0",

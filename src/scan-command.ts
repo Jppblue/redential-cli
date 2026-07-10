@@ -4,6 +4,7 @@ import { describeSince } from "./since.js";
 import { getSiteUrl } from "./config.js";
 import { readCredentials } from "./credentials.js";
 import { bundleContentHash, readLastSubmission } from "./submission-record.js";
+import { isShallowRepository } from "./git.js";
 import type { Bundle } from "./types.js";
 
 // Commits between stderr progress writes — keeps a huge repo's walk from
@@ -106,6 +107,13 @@ export async function executeScanCommand(opts: ScanCommandOptions): Promise<void
       formatSummary(bundle, {
         plain: opts.plain,
         sinceLabel: opts.since !== undefined ? describeSince(opts.since) : undefined,
+        // A second, cheap local `git rev-parse` call rather than threading
+        // this through buildBundleInteractively's Bundle-shaped return —
+        // that return type is load-bearing for principle 4 ("the printed
+        // JSON is the bundle"), so presentation-only metadata stays out of
+        // it. Only evaluated when the summary is actually rendered, same
+        // as nextStepsState below.
+        isShallow: isShallowRepository(opts.repoPath),
         ...nextStepsState(bundle, opts.configDir),
       })
     );

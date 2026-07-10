@@ -5,9 +5,11 @@ import { Command } from "commander";
 import { ScanError, AuthError, SubmitError, NetworkError } from "./errors.js";
 import { executeScanCommand } from "./scan-command.js";
 import { executeSubmitCommand } from "./submit-command.js";
+import { executeStatusCommand } from "./status-command.js";
 import { runLogin } from "./login.js";
 import { runLogout } from "./logout.js";
 import { shouldUsePlainOutput } from "./summary.js";
+import { setDebugEnabled } from "./debug.js";
 
 function getToolVersion(): string {
   const pkgUrl = new URL("../package.json", import.meta.url);
@@ -45,7 +47,17 @@ async function run(action: () => Promise<void> | void): Promise<void> {
 }
 
 const program = new Command();
-program.name("redential").description("Local, metadata-only proof bundles from git history.");
+program
+  .name("redential")
+  .description("Local, metadata-only proof bundles from git history.")
+  .option(
+    "--debug",
+    "verbose diagnostic logging to stderr (git commands, phase timings, counts) — never the token or bundle content",
+    false
+  )
+  .hook("preAction", (thisCommand) => {
+    setDebugEnabled(thisCommand.opts().debug === true);
+  });
 
 program
   .command("scan")
@@ -98,6 +110,13 @@ program
   .description("Delete the locally stored session token.")
   .action(async () => {
     await run(() => runLogout());
+  });
+
+program
+  .command("status")
+  .description("Show local login state, config dir, and last submission — read-only, zero network.")
+  .action(async () => {
+    await run(() => executeStatusCommand({ toolVersion: getToolVersion() }));
   });
 
 program

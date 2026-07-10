@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Readable, Writable } from "node:stream";
-import { promptAuthors, promptConfirmAttestation, promptConfirmUpload } from "../src/prompt.js";
+import { promptAuthors, promptConfirmAttestation, promptConfirmUpload, promptUseGitIdentity } from "../src/prompt.js";
 import { ScanError } from "../src/scan.js";
 
 // Stdin closed/EOF before an answer (e.g. piped input in a script or CI)
@@ -47,6 +47,31 @@ describe("prompt EOF handling", () => {
     await expect(
       promptConfirmUpload({ input: endedInput(), output: sinkOutput() })
     ).rejects.toBeInstanceOf(ScanError);
+  });
+
+  it("promptUseGitIdentity rejects when input closes before an answer", async () => {
+    await expect(
+      promptUseGitIdentity({ email: "a@example.com", count: 1 }, { input: endedInput(), output: sinkOutput() })
+    ).rejects.toBeInstanceOf(ScanError);
+  });
+});
+
+describe("promptUseGitIdentity — Y/n confirmation, Y default", () => {
+  const candidate = { email: "you@example.com", count: 42 };
+
+  it("accepts on Enter (empty answer), defaulting to yes", async () => {
+    const result = await promptUseGitIdentity(candidate, { input: lineInput(""), output: sinkOutput() });
+    expect(result).toBe(true);
+  });
+
+  it("accepts on an explicit y/Y", async () => {
+    const result = await promptUseGitIdentity(candidate, { input: lineInput("Y"), output: sinkOutput() });
+    expect(result).toBe(true);
+  });
+
+  it("declines on an explicit n", async () => {
+    const result = await promptUseGitIdentity(candidate, { input: lineInput("n"), output: sinkOutput() });
+    expect(result).toBe(false);
   });
 });
 

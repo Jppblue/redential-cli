@@ -70,7 +70,12 @@ export async function executeSubmitCommand(opts: SubmitCommandOptions): Promise<
   // failure here (e.g. an unwritable config dir) would be a real local
   // problem worth surfacing, not a network blip to swallow.
   saveLastSubmission(
-    { site_url: siteUrl, bundle_hash: bundleContentHash(bundle), submitted_at: new Date().toISOString() },
+    {
+      site_url: siteUrl,
+      bundle_hash: bundleContentHash(bundle),
+      submitted_at: new Date().toISOString(),
+      repo_fingerprint: bundle.repo.repo_fingerprint,
+    },
     opts.configDir
   );
 

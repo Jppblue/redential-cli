@@ -240,6 +240,13 @@ export interface FormatSummaryOptions {
    * (the default: full history). Local CLI input, not bundle data — same
    * category as hasSession/alreadySubmittedIdentical above. */
   sinceLabel?: string;
+  /** True when the scanned repo is a shallow clone (git.ts's
+   * isShallowRepository) — same local-state category as the fields above.
+   * Adds a note near the top of the summary; the stderr warning
+   * (shallow-repo.ts) is the more prominent, always-shown version of this
+   * — the summary note is a lighter reminder for whoever's looking at the
+   * "wrapped" output specifically. */
+  isShallow?: boolean;
 }
 
 export function formatSummary(bundle: Bundle, opts: FormatSummaryOptions = {}): string {
@@ -269,6 +276,11 @@ export function formatSummary(bundle: Bundle, opts: FormatSummaryOptions = {}): 
   lines.push(
     `  ${colors.BOLD}${humanizeSpan(bundle.commits.span_days)}, ${commitCount} commits${colors.RESET}${windowSuffix}`
   );
+  if (opts.isShallow) {
+    lines.push(
+      `  ${colors.YELLOW}Note: shallow clone — history before the shallow boundary isn't counted above.${colors.RESET}`
+    );
+  }
   lines.push("");
 
   lines.push(heading("COMMITS BY HOUR (UTC)", theme));

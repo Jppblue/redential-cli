@@ -5,6 +5,7 @@ import { getCommitsAddedLines, type RawCommit } from "./git.js";
 import { isExcludedPath, heuristicallyGeneratedPaths } from "./churn-exclusions.js";
 import { extractImportedPackages } from "./import-detect.js";
 import { ScanError } from "./errors.js";
+import { debugLog } from "./debug.js";
 import type { DetectedSkill } from "./types.js";
 
 export interface FixtureCase {
@@ -246,6 +247,9 @@ export async function detectSkills(
   };
 
   const nonMergeCommits = userCommits.filter((c) => !c.isMerge);
+  debugLog(
+    `diff batching: ${nonMergeCommits.length} non-merge commits in ${Math.ceil(nonMergeCommits.length / DIFF_BATCH_SIZE)} batch(es) of up to ${DIFF_BATCH_SIZE}`
+  );
   for (let i = 0; i < nonMergeCommits.length; i += DIFF_BATCH_SIZE) {
     const batch = nonMergeCommits.slice(i, i + DIFF_BATCH_SIZE);
     const addedLinesBySha = await getCommitsAddedLines(

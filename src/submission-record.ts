@@ -8,6 +8,13 @@ export interface SubmissionRecord {
   site_url: string;
   bundle_hash: string;
   submitted_at: string;
+  // Added for `redential status` — a pre-existing local record written
+  // before this field existed simply won't have it (JSON.parse leaves it
+  // undefined; no migration needed, nothing crashes). Same non-secret
+  // rationale as bundle_hash: this is already inside the bundle that gets
+  // uploaded, status just surfaces already-local, already-reviewed data —
+  // not a new thing leaving the machine.
+  repo_fingerprint?: string;
 }
 
 function recordPath(configDir: string): string {

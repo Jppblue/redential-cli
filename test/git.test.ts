@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, commit, createRepo } from "./support/fixtures.js";
-import { getAllCommits, getCommitAddedLines, getCommitsAddedLines, getCommitCount } from "../src/git.js";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { cleanup, commit, createRepo, createShallowClone } from "./support/fixtures.js";
+import {
+  getAllCommits,
+  getCommitAddedLines,
+  getCommitsAddedLines,
+  getCommitCount,
+  getConfiguredUserEmail,
+  isShallowRepository,
+} from "../src/git.js";
 import { extractImportedPackages } from "../src/import-detect.js";
 
 const dirs: string[] = [];
@@ -161,5 +172,52 @@ describe("getAllCommits — since window and progress", () => {
     const dir = createRepo();
     dirs.push(dir);
     await expect(getAllCommits(dir)).resolves.toEqual([]);
+  });
+});
+
+describe("isShallowRepository", () => {
+  it("is false for an ordinary full clone", () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    commit(dir, { message: "x", authorName: "You", authorEmail: "you@example.com", files: { "a.ts": "1\n" } });
+    expect(isShallowRepository(dir)).toBe(false);
+  });
+
+  it("is true for a --depth 1 shallow clone", () => {
+    const source = createRepo();
+    dirs.push(source);
+    commit(source, { message: "1", authorName: "You", authorEmail: "you@example.com", files: { "a.ts": "1\n" } });
+    commit(source, { message: "2", authorName: "You", authorEmail: "you@example.com", files: { "a.ts": "2\n" } });
+
+    const shallow = createShallowClone(source);
+    dirs.push(shallow);
+    expect(isShallowRepository(shallow)).toBe(true);
+    // Sanity check the fixture actually IS shallow, independent of the
+    // function under test — only 1 of the 2 source commits is present.
+    expect(execFileSync("git", ["rev-list", "--count", "HEAD"], { cwd: shallow, encoding: "utf8" }).trim()).toBe(
+      "1"
+    );
+  });
+
+  it("fails open (false) rather than throwing when the path isn't a git repo at all", () => {
+    const dir = mkdtempSync(join(tmpdir(), "redential-not-a-repo-"));
+    dirs.push(dir);
+    expect(isShallowRepository(dir)).toBe(false);
+  });
+});
+
+describe("getConfiguredUserEmail", () => {
+  it("reads the repo-local git config user.email", () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    execFileSync("git", ["config", "user.email", "configured@example.com"], { cwd: dir });
+    expect(getConfiguredUserEmail(dir)).toBe("configured@example.com");
+  });
+
+  it("returns whatever is configured even when it doesn't match any commit author (build-bundle.ts's job to compare, not this)", () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    execFileSync("git", ["config", "user.email", "nobody-else@example.com"], { cwd: dir });
+    expect(getConfiguredUserEmail(dir)).toBe("nobody-else@example.com");
   });
 });

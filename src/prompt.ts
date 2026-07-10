@@ -71,6 +71,30 @@ export async function promptAuthors(
   }
 }
 
+/**
+ * Offers the repo's own `git config user.email` as a fast default before
+ * falling back to the full author list — only ever called when it matches
+ * one of 2+ real candidates (build-bundle.ts). Y-default, same pattern as
+ * promptAuthors' single-candidate confirmation.
+ */
+export async function promptUseGitIdentity(
+  candidate: AuthorCandidate,
+  streams: PromptStreams = DEFAULT_STREAMS
+): Promise<boolean> {
+  const rl = createInterface(streams);
+  try {
+    const answer = await questionOrThrowOnClose(
+      rl,
+      `Found your git identity: ${formatCandidate(candidate)}. Use it? (Y/n) `,
+      "Input closed before an author identity was selected."
+    );
+    const trimmed = answer.trim().toLowerCase();
+    return trimmed === "" || trimmed.startsWith("y");
+  } finally {
+    rl.close();
+  }
+}
+
 const ATTESTATION_TEXT = "I am authorized to analyze this repository.";
 
 export async function promptConfirmAttestation(

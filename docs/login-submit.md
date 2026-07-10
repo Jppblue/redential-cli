@@ -1,4 +1,4 @@
-# `redential login`, `redential submit`, `redential logout`
+# `redential login`, `redential submit`, `redential logout`, `redential status`
 
 `scan` never touches the network (principle 1). These three commands are the
 only place the CLI ever does — see [principles.md](principles.md).
@@ -95,14 +95,43 @@ unrelated to your session. It also never touches `last-submission.json`
 
 **`last-submission.json`**, same directory. Written by `submit`
 immediately after a successful upload: `{site_url, bundle_hash,
-submitted_at}` — a local, unsalted sha256 of the uploaded bundle's content
-(see `src/submission-record.ts`'s `bundleContentHash`), never the bundle
-itself. Its only purpose is letting a later `scan`'s wrapped summary tell
-"already uploaded, nothing new to submit" from "not submitted yet" (see
-[docs/scan.md](scan.md#closing-next-step-hint)) — it's read-only bookkeeping,
-never sent anywhere, and unlike `credentials.json`/`salt` it isn't written
-with restricted file permissions, since it isn't a secret: just a hash of
-content you already reviewed and already chose to upload.
+submitted_at, repo_fingerprint}` — a local, unsalted sha256 of the
+uploaded bundle's content (see `src/submission-record.ts`'s
+`bundleContentHash`) plus the bundle's own `repo.repo_fingerprint`, never
+the bundle itself. Its only purpose is letting a later `scan`'s wrapped
+summary tell "already uploaded, nothing new to submit" from "not
+submitted yet" (see [docs/scan.md](scan.md#closing-next-step-hint)), and
+letting `status` (below) show a glance at what was last uploaded — it's
+read-only bookkeeping, never sent anywhere, and unlike
+`credentials.json`/`salt` it isn't written with restricted file
+permissions, since it isn't a secret: just a hash of content you already
+reviewed and already chose to upload. `repo_fingerprint` is optional in
+the type — a record written by an older CLI version simply won't have it;
+`status` shows "unknown" for that line rather than crashing or migrating
+the file.
+
+## `status`: local state, read-only
+
+```bash
+redential status
+```
+
+A snapshot of local CLI state only — zero network, works whether or not
+you're logged in:
+
+- CLI version and the config dir path (from `DEFAULT_CONFIG_DIR`, above).
+- Login state: logged in and to which `SITE_URL`, a stored session for a
+  *different* `SITE_URL` (told apart explicitly, same check `submit`
+  itself makes), or not logged in at all. **Never prints `access_token`**
+  — same "never log the token" rule as every error path in this CLI.
+- The last submission on record (if any): timestamp, plus **prefixes**
+  (12 hex characters) of the bundle hash and repo fingerprint — enough to
+  eyeball "is this the record I think it is" without printing the full
+  values into a terminal that might get pasted into a support thread.
+
+`src/status-command.ts` reads only files this CLI itself already writes
+(`credentials.json`, `last-submission.json`) — never the scanned repo,
+never a git command, never the network.
 
 ## `submit`: review, then upload
 
