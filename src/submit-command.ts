@@ -25,10 +25,11 @@ export type SubmitCommandOptions = BuildBundleOptions & {
   checkForUpdateFn?: () => Promise<void>;
   // True when stdout is an interactive terminal — cli.ts passes
   // `process.stdout.isTTY`. Determines whether the human-readable consent
-  // summary is printed before the JSON payload; tests set this explicitly
-  // instead of relying on a real TTY. Undefined behaves like `false`
-  // (no consent block), matching a piped stdout so the printed bundle JSON
-  // stays byte-identical to before this feature existed.
+  // summary (and its header) is printed at all; when it is, it comes after
+  // the JSON payload, right before the upload prompt. Tests set this
+  // explicitly instead of relying on a real TTY. Undefined behaves like
+  // `false` (no header, no consent block), matching a piped stdout so the
+  // printed bundle JSON stays byte-identical to before this feature existed.
   isTTY?: boolean;
   // True to render the consent summary with the ASCII/no-color fallback
   // theme (see summary.ts's shouldUsePlainOutput) instead of ANSI + Unicode
@@ -59,11 +60,19 @@ export async function executeSubmitCommand(opts: SubmitCommandOptions): Promise<
 
   const bundle = await buildBundleInteractively(opts);
   const bundleJson = JSON.stringify(bundle, null, 2);
+  // TTY order: header, then the exact JSON (byte-for-byte what gets sent —
+  // this print IS the guarantee, so nothing may come between the header and
+  // it), then the human-readable consent box, then (below) the identity
+  // corroboration line if any, then the upload prompt. The consent box goes
+  // right before the prompt on purpose: the last thing the dev reads before
+  // typing y/n should be the readable summary, not the tail of a JSON blob.
   if (opts.isTTY) {
-    log(formatConsentSummary(bundle, { plain: opts.plain, command: "submit" }));
     log("Exact payload (byte-for-byte what gets sent):");
   }
   log(bundleJson);
+  if (opts.isTTY) {
+    log(formatConsentSummary(bundle, { plain: opts.plain, command: "submit" }));
+  }
 
   // Identity corroboration (optional X-Redential-Identity-Corroboration
   // header on postBundle below) must be fetched and its counts printed

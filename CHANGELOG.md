@@ -7,6 +7,17 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+### Changed
+- **`submit`'s TTY output reordered: consent box now prints right before the
+  upload prompt, not before the JSON.** The exact payload header and JSON
+  (`Exact payload (byte-for-byte what gets sent):` + the bundle JSON) now
+  print first; the human-readable consent box (`formatConsentSummary`) and
+  the identity-corroboration line (if any) print after the JSON, immediately
+  before the "Upload this bundle?" confirmation — so the last thing read
+  before consenting is the plain-language summary, not the tail of the JSON.
+  Piped/non-TTY `submit` output is unaffected (byte-identical). `scan`'s own
+  TTY order (consent box before the JSON) is unchanged.
+
 ## [0.2.1] - 2026-07-11
 
 ### Added

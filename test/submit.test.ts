@@ -331,7 +331,7 @@ describe("executeSubmitCommand", () => {
 });
 
 describe("executeSubmitCommand — consent summary", () => {
-  it("with isTTY: true, logs contain the consent block, then exactly the payload header, then the bundle JSON, in that order — and the uploaded body still matches the JSON log entry byte-for-byte", async () => {
+  it("with isTTY: true, logs contain the payload header, then the bundle JSON, then the consent block, in that order — and the uploaded body still matches the JSON log entry byte-for-byte", async () => {
     const server = await startMockServer((req) => {
       if (req.url === "/api/cli/bundles") return { status: 200, body: { id: "bundle-tty" } };
       return { status: 404, body: {} };
@@ -357,13 +357,13 @@ describe("executeSubmitCommand — consent summary", () => {
       isTTY: true,
     });
 
-    expect(logs[0]).toContain("WHAT GETS UPLOADED");
-    expect(logs[1]).toBe("Exact payload (byte-for-byte what gets sent):");
-    expect(() => JSON.parse(logs[2])).not.toThrow();
+    expect(logs[0]).toBe("Exact payload (byte-for-byte what gets sent):");
+    expect(() => JSON.parse(logs[1])).not.toThrow();
+    expect(logs[2]).toContain("WHAT GETS UPLOADED");
 
     const requests = bundleRequests(server);
     expect(requests).toHaveLength(1);
-    expect(requests[0].body).toBe(logs[2]);
+    expect(requests[0].body).toBe(logs[1]);
   });
 
   it("without isTTY, logs are unchanged from before this feature (no consent block, no payload header)", async () => {

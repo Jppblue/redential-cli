@@ -141,16 +141,7 @@ selection, same authorization-confirmation prompt, same `runScan`. It then:
 
 1. Requires a stored session whose `site_url` matches the current
    `SITE_URL` (`redential login` first, otherwise it refuses).
-2. On a real TTY, prints a short human-readable **consent summary** first —
-   a boxed block (`formatConsentSummary`, `src/summary.ts`, the same
-   function and visual language `scan`'s consent summary uses — see
-   [docs/scan.md](scan.md#the-consent-summary)) listing what IS uploaded
-   (commit count and span, detected-skill count with the top 3 names, time
-   patterns/languages/categories as aggregates, salted fingerprints — every
-   number read off the bundle about to be printed, never hardcoded) and
-   what is NEVER uploaded (source code, file names, commit messages, the
-   repo's name, other contributors' identities). Right after it, a header
-   line —
+2. On a real TTY, prints a header line —
    ```
    Exact payload (byte-for-byte what gets sent):
    ```
@@ -158,15 +149,26 @@ selection, same authorization-confirmation prompt, same `runScan`. It then:
    closes the gap `scan`-only builds left open (see
    [privacy-tests.md](privacy-tests.md)): the request body is the literal
    string that was printed, not a re-serialization of the parsed object.
-   The user reads the plain-language summary and the exact payload before
-   anything below asks for consent. Piped/redirected `submit` output
-   (scripted use) is unaffected — `submit` has no `--json` flag (that's
-   `scan`-only) — this is a TTY-only addition, byte-identical to prior
-   releases otherwise.
+   Right after the JSON, a short human-readable **consent summary** — a
+   boxed block (`formatConsentSummary`, `src/summary.ts`, the same
+   function and visual language `scan`'s consent summary uses — see
+   [docs/scan.md](scan.md#the-consent-summary)) listing what IS uploaded
+   (commit count and span, detected-skill count with the top 3 names, time
+   patterns/languages/categories as aggregates, salted fingerprints — every
+   number read off the bundle just printed, never hardcoded) and what is
+   NEVER uploaded (source code, file names, commit messages, the repo's
+   name, other contributors' identities). The summary comes *after* the
+   JSON on purpose (unlike `scan`, which shows it first) — the last thing
+   the user reads before being asked to consent should be the
+   human-readable recap, not the tail of a JSON blob. Piped/redirected
+   `submit` output (scripted use) is unaffected — `submit` has no `--json`
+   flag (that's `scan`-only) — this is a TTY-only addition, byte-identical
+   to prior releases otherwise.
 3. Fetches identity corroboration (below) and, if it succeeds, prints one
-   informational line with the result before asking for upload consent —
-   see that section for exactly what is and isn't sent. Never blocks or
-   delays the next step: any failure here simply skips the line.
+   informational line with the result — right after the consent box, still
+   before asking for upload consent — see that section for exactly what is
+   and isn't sent. Never blocks or delays the next step: any failure here
+   simply skips the line.
 4. Asks "Upload this bundle?" — a **separate** confirmation from the
    "I am authorized to analyze this repository" attestation `scan` already
    requires. `--yes` answers the authorization question (same meaning as
