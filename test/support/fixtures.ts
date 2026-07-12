@@ -25,6 +25,28 @@ function run(cwd: string, args: string[], env?: Record<string, string>): string 
   }).toString();
 }
 
+/**
+ * Disables git's background maintenance for a fixture repo. `git commit`
+ * runs `gc --auto` once the loose-object/packfile threshold is crossed —
+ * easily reached by fixtures that commit hundreds/thousands of times — and
+ * with the default `gc.autoDetach=true` it forks into the background and
+ * keeps repacking/pruning `.git` after the triggering command returns.
+ * Observed in CI (ubuntu-latest, loaded runner) as two symptoms of the same
+ * race: a `git commit` mid-loop failing with "invalid object ... for
+ * <file>" / "Error building trees" because a just-written loose object was
+ * pruned/repacked out from under it, and a later `rmSync` cleanup failing
+ * with `ENOTEMPTY` because the detached gc was still writing into `.git`.
+ * Every fixture-repo constructor below calls this so no fixture can ever
+ * spawn background gc.
+ */
+function disableBackgroundMaintenance(dir: string): void {
+  run(dir, ["config", "gc.auto", "0"]);
+  run(dir, ["config", "gc.autoDetach", "false"]);
+  // `maintenance.auto` postdates `gc.auto`/`gc.autoDetach` (newer git); on
+  // older git versions setting an unknown config key is a harmless no-op.
+  run(dir, ["config", "maintenance.auto", "false"]);
+}
+
 /** Fresh git repo in a tmpdir — never a committed fixture with real history. */
 export function createRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "redential-test-"));
@@ -35,6 +57,7 @@ export function createRepo(): string {
   // exactly the line-ending bugs these fixtures exist to catch on that one
   // platform. Repo-local, so it can never affect the CLI's own git config.
   run(dir, ["config", "core.autocrlf", "false"]);
+  disableBackgroundMaintenance(dir);
   return dir;
 }
 
@@ -134,6 +157,7 @@ export function createRepoWithGeneratedHistory(commitCount: number): string {
   const dir = mkdtempSync(join(tmpdir(), "redential-huge-"));
   run(dir, ["init", "-q", "-b", "main"]);
   run(dir, ["config", "core.autocrlf", "false"]);
+  disableBackgroundMaintenance(dir);
 
   const startTs = Math.floor(new Date("2020-01-01T00:00:00Z").getTime() / 1000);
   let stream = "";
@@ -200,6 +224,7 @@ export function createRepoWithDualDateHistory(
   const dir = mkdtempSync(join(tmpdir(), "redential-dualdate-"));
   run(dir, ["init", "-q", "-b", "main"]);
   run(dir, ["config", "core.autocrlf", "false"]);
+  disableBackgroundMaintenance(dir);
 
   let stream = "";
   commits.forEach((c, i) => {
@@ -236,6 +261,7 @@ export function createShallowClone(sourceDir: string): string {
     encoding: "utf8",
   });
   run(dir, ["config", "core.autocrlf", "false"]);
+  disableBackgroundMaintenance(dir);
   return dir;
 }
 
