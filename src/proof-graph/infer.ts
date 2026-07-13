@@ -582,7 +582,16 @@ const DIFF_BATCH_SIZE = 200;
  * line" — the same diff-based primitive scan already uses, just reduced to
  * a path set instead of pattern-matched against signatures.
  */
-export async function collectUserTouchedFiles(repoPath: string, userCommits: RawCommit[]): Promise<Set<string>> {
+export async function collectUserTouchedFiles(
+  repoPath: string,
+  userCommits: RawCommit[],
+  // Optional progress callback, invoked once per commit-diff batch with
+  // (commits processed so far, total commits to process) — counts only,
+  // never a sha/path (see src/proof-graph/progress.ts's content rule).
+  // Purely additive: existing callers that don't pass this keep working
+  // unchanged.
+  onProgress?: (done: number, total: number) => void
+): Promise<Set<string>> {
   const touched = new Set<string>();
   const nonMergeCommits = userCommits.filter((c) => !c.isMerge);
 
@@ -603,6 +612,7 @@ export async function collectUserTouchedFiles(repoPath: string, userCommits: Raw
         touched.add(file.path);
       }
     }
+    onProgress?.(Math.min(i + DIFF_BATCH_SIZE, nonMergeCommits.length), nonMergeCommits.length);
   }
 
   return touched;

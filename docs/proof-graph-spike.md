@@ -625,3 +625,133 @@ per-BFS work could dominate the budget and trigger a spurious
 `searchBounded` degradation that has nothing to do with the actual
 search — the depth-capped design avoids that by construction, not by
 having a large enough budget to absorb it.
+
+### History-dominated repos (follow-up)
+
+A second, separate scale finding, on top of the anchor-search hang above:
+once the anchor-search cost was fixed, phase-by-phase timing on
+history-heavy fixtures (thousands of files, thousands of commits, several
+distinct authors — the realistic shape of a mature team repo, not a toy)
+showed a DIFFERENT phase dominating wall time. `redential explain`'s own
+history-reading phase — `getAllCommits` walking and `--numstat`-diffing
+**every commit by every author**, then filtering down to the selected
+author's commits in JS afterward — measured at 49% of total wall time on a
+5,000-file/5,750-commit fixture, ahead of snapshot, parse, and the anchor
+search combined. `collectUserTouchedFiles` (the per-user added-lines diff
+fetch, downstream of that same over-broad commit set) was the next-largest
+cost. A raw-git A/B (`git log --numstat` filtered by `--author` at the git
+level vs. the full unfiltered walk) measured author-filtered git as
+3.4–4.5x faster than the full walk on the same history.
+
+Three quick wins landed here to close the gap between "what `explain` reads"
+and "what it actually needs" (author-scoped attribution over a
+possibly-narrowed date window), without touching the anchor-search fix
+above or reopening any of its invariants:
+
+1. **Git-level author filtering (`src/git.ts`).** `GetAllCommitsOptions`
+   gained an optional `authorEmails?: string[]`, translated to one
+   `--author=<escaped>` arg per email (git ORs multiple `--author` patterns
+   together). This is an OPTIMIZATION ONLY, never the correctness boundary:
+   `git log --author` is a substring match against the whole `"Name
+   <email>"` field, not an exact-equality match on the email alone, so
+   `explain-command.ts`'s existing exact-equality JS filter over the
+   result stays in place unchanged and remains the actual source of truth
+   — git-level filtering can only ever narrow what git streams back for
+   speed, never redefine which commits count as "the author's". Escaping
+   required care: `git log --author` matches with POSIX BASIC regular
+   expressions by default, where `+`/`?`/`(`/`)`/`{`/`}`/`|` are literal
+   characters unless backslash-escaped (escaping them is what turns them
+   INTO metacharacters — a GNU BRE extension, the opposite of
+   extended/PCRE regex) — a naive "escape every ERE metacharacter"
+   approach was tried first and verified, against a real git commit, to
+   silently break plus-tag addresses like `user+tag@example.com` (an
+   escaped `\+` matched nothing; the literal `+` matched correctly). Only
+   `.`/`*`/`^`/`$`/`[`/`]`/`\` are escaped. `scan.ts`'s existing
+   `getAllCommits` calls (`listAuthors`, and `runScan`'s own walk) are
+   unchanged and stay unfiltered — `listAuthors` needs every author to
+   build its candidate list, and `runScan` computes
+   `identity.other_contributors_count`/`ownership.user_commit_ratio` from
+   the full population, both of which need every commit, not just the
+   selected author's.
+2. **`explain` passes the resolved author into the walk, plus a new
+   `--since`.** `explain-command.ts` now threads its already-resolved
+   author email(s) into `getAllCommits`'s new option. `redential explain`
+   also gained a `--since <spec>` flag (`src/cli.ts`), parsed with the
+   exact same `src/since.ts` spec/plumbing `scan`'s own `--since` uses
+   (relative windows like `"2years"`, or an absolute date), defaulting to
+   full history. Attribution semantics: `--since` can only NARROW the
+   author's touched-file set — it can turn `attributed=true` into `false`
+   by excluding commits, never invent attribution the unwindowed history
+   didn't already support. It's an explicit user-requested narrowing of
+   the evidence window, not new inference. Because a windowed run can
+   silently look like "no evidence" if the window itself isn't visible,
+   the `Attribution (author: ...)` output line now also names the active
+   `--since` window whenever one is set, so the narrowing shows up in the
+   printed evidence itself, not just in how the command happened to be
+   invoked.
+3. **Snapshot content-fetch batch size (`src/proof-graph/snapshot.ts`).**
+   `CONTENT_BATCH_SIZE` (the `git cat-file --batch` chunk size
+   `readHeadSnapshot` fetches file content in) was raised from 200 to
+   1000. Measured: at 2,000 files, 200 meant 10 batches, each paying a
+   fixed `git cat-file --batch` process-spawn cost on top of its actual
+   read work — that per-batch overhead alone measured ~300ms across those
+   10 batches. 1000 keeps worst-case memory comfortably bounded: 1000
+   files × the existing 200 KiB per-file cap (`maxFileBytes`) is a 200 MB
+   theoretical ceiling, and real TypeScript source sits far below that cap
+   in practice, so a batch's actual footprint is a small fraction of the
+   theoretical worst case. Not raised further: 1000 already cuts batch
+   count 5x on the largest fixture measured here (5,000 files → 5 batches
+   instead of 25), and going higher grows the worst-case-memory ceiling
+   for no further measured benefit.
+
+**Measured impact**, phase-by-phase, on two history-heavy fixtures (a
+multi-author repo, several thousand files/commits each), comparing the
+pre-fix unfiltered walk against the post-fix author-filtered walk (same
+built `dist/`, same machine, single-run measurements — expect normal
+run-to-run variance from background load, not a rigorous benchmark suite):
+
+| Fixture | Phase | Before | After |
+|---|---|---|---|
+| 3,500 files / 2,967 commits | `getAllCommits` | 4,127ms (walks all 2,967 commits) | 1,249ms (walks only the 1,518 matching commits) |
+| 3,500 files / 2,967 commits | total pipeline wall time | 8,856ms | 5,479ms |
+| 5,000 files / 5,750 commits | `getAllCommits` | 7,630ms (walks all 5,750 commits) | 3,337ms (walks only the 2,896 matching commits) |
+| 5,000 files / 5,750 commits | total pipeline wall time | 17,647ms | 10,603ms |
+
+Both fixtures land close to the raw-git A/B's 3.4–4.5x range on the
+`getAllCommits` phase itself (3.3x and 2.3x respectively — the gap from the
+raw-git number reflects this harness's Node-side commit parsing/streaming
+overhead, present on both sides of the comparison, on top of the git
+process's own filtering work). The `collectUserTouchedFiles` phase (still
+downstream of the filtered commit set, un-optimized in this milestone) and
+`snapshot`/`parse` remain the next-largest costs on these fixtures — see
+"Deferred" below for what a further pass at those would need.
+
+**Deferred to a future milestone** (diagnosed, not landed here — each of
+these is a larger design decision than a quick win, and none of them was
+needed to close the specific 49%-of-wall gap measured above):
+
+- **Attribution early-exit.** Semantics-preserving for the positive case
+  only: once a supporting anchor file is confirmed touched by the author,
+  no more commits need scanning for THAT finding, since more history can
+  only add confirmations, never remove one already found (see the
+  `--since` narrowing note above — the same "more evidence only adds,
+  never subtracts positive attribution" direction, just applied to when
+  the walk itself can stop rather than how far back it goes). Not
+  semantics-preserving for the negative case (a "not attributed" result
+  still requires having scanned everything in the window), so this would
+  need care to land correctly, not just an early `break`.
+- **Candidate/lazy parsing.** Sound in principle — per anchor-rule
+  substring analysis of a file's content narrows which files even need
+  full parsing/graph-building before an anchor could exist in them — but
+  the actual neighborhood size (how many files a real candidate set
+  touches once resolved-import connectivity is followed outward) needs to
+  be MEASURED on a real repo before betting engineering effort on it:
+  synthetic random import graphs are known to balloon the reachable
+  neighborhood to effectively 100% of files past a small hop count, which
+  would make this optimization a no-op on exactly the repos it's meant to
+  help. Diagnosed, not landed, pending that real-repo measurement.
+- **Worker-thread parallel parse.** A secondary target (~14% of wall on
+  the measured fixtures), lower priority than the history-walk fix above
+  because it's a smaller fraction of the total and (unlike the git-level
+  author filter) would add real concurrency-correctness surface — not
+  attempted in this milestone.

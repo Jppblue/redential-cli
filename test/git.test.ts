@@ -175,6 +175,122 @@ describe("getAllCommits — since window and progress", () => {
   });
 });
 
+describe("getAllCommits — authorEmails (git-level filter optimization)", () => {
+  it("with one authorEmail, returns only that author's commits (two authors present)", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    commit(dir, {
+      message: "by you",
+      authorName: "You",
+      authorEmail: "you@example.com",
+      files: { "a.ts": "1\n" },
+    });
+    commit(dir, {
+      message: "by someone else",
+      authorName: "Someone",
+      authorEmail: "someone@example.com",
+      files: { "b.ts": "2\n" },
+    });
+
+    const filtered = await getAllCommits(dir, { authorEmails: ["you@example.com"] });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].email).toBe("you@example.com");
+  });
+
+  it("a regex-metacharacter email (the '+' in a plus-tag address) still matches correctly", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    commit(dir, {
+      message: "plus-tag commit",
+      authorName: "You",
+      authorEmail: "user+tag@example.com",
+      files: { "a.ts": "1\n" },
+    });
+    commit(dir, {
+      message: "unrelated commit",
+      authorName: "Someone",
+      authorEmail: "someone@example.com",
+      files: { "b.ts": "2\n" },
+    });
+
+    const filtered = await getAllCommits(dir, { authorEmails: ["user+tag@example.com"] });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].email).toBe("user+tag@example.com");
+  });
+
+  // Regression: `git log --author`'s pattern language is governed by
+  // `grep.patternType`, which defaults to "basic" but is user/repo
+  // configurable — escapeRegexForGitAuthor's escaping is written
+  // specifically for BASIC regex semantics (see git.ts's own comment), and
+  // is silently WRONG under "extended" (a bare `+` in the escaped pattern
+  // stops being a literal character once the pattern is read as ERE
+  // instead of BRE). Without pinning `--basic-regexp` on the command line,
+  // a repo/user with `grep.patternType=extended` set locally would
+  // silently UNDERMATCH — the exact failure mode this test reproduces by
+  // setting that config directly on the fixture repo, not by simulating it.
+  it("still matches a plus-tag email even when the repo's own grep.patternType is set to 'extended'", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    execFileSync("git", ["config", "grep.patternType", "extended"], { cwd: dir });
+    commit(dir, {
+      message: "plus-tag commit under extended grep.patternType",
+      authorName: "You",
+      authorEmail: "user+tag@example.com",
+      files: { "a.ts": "1\n" },
+    });
+
+    const filtered = await getAllCommits(dir, { authorEmails: ["user+tag@example.com"] });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].email).toBe("user+tag@example.com");
+  });
+
+  it("multiple emails OR together — commits from any of them are returned", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    commit(dir, {
+      message: "by alice",
+      authorName: "Alice",
+      authorEmail: "alice@example.com",
+      files: { "a.ts": "1\n" },
+    });
+    commit(dir, {
+      message: "by bob",
+      authorName: "Bob",
+      authorEmail: "bob@example.com",
+      files: { "b.ts": "2\n" },
+    });
+    commit(dir, {
+      message: "by carol",
+      authorName: "Carol",
+      authorEmail: "carol@example.com",
+      files: { "c.ts": "3\n" },
+    });
+
+    const filtered = await getAllCommits(dir, { authorEmails: ["alice@example.com", "bob@example.com"] });
+    expect(filtered.map((c) => c.email).sort()).toEqual(["alice@example.com", "bob@example.com"]);
+  });
+
+  it("undefined/omitted authorEmails walks unfiltered, matching every existing caller's behavior", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    commit(dir, {
+      message: "by you",
+      authorName: "You",
+      authorEmail: "you@example.com",
+      files: { "a.ts": "1\n" },
+    });
+    commit(dir, {
+      message: "by someone else",
+      authorName: "Someone",
+      authorEmail: "someone@example.com",
+      files: { "b.ts": "2\n" },
+    });
+
+    const all = await getAllCommits(dir);
+    expect(all).toHaveLength(2);
+  });
+});
+
 describe("getAllCommits — committer date", () => {
   it("defaults committerDate to authorDate when the commit was never rewritten", async () => {
     const dir = createRepo();

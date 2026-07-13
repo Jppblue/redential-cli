@@ -91,6 +91,65 @@ export interface GetAllCommitsOptions {
    * (oldest-first) order — drives scan-command.ts's stderr progress line.
    * Never receives anything beyond a running count: no sha, path, or email. */
   onProgress?: (count: number) => void;
+  /**
+   * Optional git-level author filter, translated to one `--author=<escaped>`
+   * arg per email (git ORs multiple `--author` patterns together, so any of
+   * these emails matches), plus a forced `--basic-regexp` (see
+   * getAllCommits' own comment on why that flag is REQUIRED, not
+   * defensive-only). An OPTIMIZATION ONLY, never the correctness boundary:
+   * `git log --author` is a SUBSTRING *regex* match against the whole
+   * "Name <email>" author field, not an exact-equality match on the email
+   * alone, so each email is escaped (see escapeRegexForGitAuthor) to stop
+   * regex metacharacters it may contain from being interpreted as regex
+   * syntax instead of literal characters — see that function's own comment
+   * for exactly which characters that means (POSIX BASIC regex, where e.g.
+   * `+` is a literal character and escaping it with `\+` would instead turn
+   * it INTO the "one or more" quantifier — the opposite of what a naive
+   * "escape everything" approach would assume, and exactly the failure mode
+   * a plus-tag address like `user+tag@example.com` would hit). Escaped
+   * correctly AND matched under a pinned BRE (never left to
+   * `grep.patternType`, which a user/repo config can set to `extended` and
+   * silently invert this escaping's meaning — verified empirically: with
+   * `grep.patternType=extended` set, this exact escaped pattern matches
+   * ZERO commits, a silent UNDERMATCH that could flip a real attribution to
+   * false), the pattern can still OVERMATCH in principle (e.g. an unrelated
+   * identity whose "Name <email>" field happens to contain this exact
+   * substring), but by construction it can never UNDERMATCH a commit whose
+   * email genuinely equals one of these — the field verbatim contains
+   * "<email>", so the escaped-literal substring search is always found
+   * there under BRE. Every caller MUST still apply its own exact-equality
+   * filter over the result (see explain-command.ts's `userCommits` filter)
+   * — this option exists purely to shrink what git itself has to stream
+   * back, not to redefine which commits count as "the author's".
+   * Undefined/[] walks unfiltered, matching every existing caller (scan.ts's
+   * listAuthors and its own unfiltered runScan walk both need every author
+   * and stay that way) — and skips `--basic-regexp` entirely in that case,
+   * since no `--author` pattern is on the command line to interpret.
+   */
+  authorEmails?: string[];
+}
+
+/**
+ * Escapes an email for use as a literal (non-regex) `git log --author`
+ * pattern, ASSUMING POSIX BASIC regular expressions (BRE) — the pattern
+ * language getAllCommits pins with `--basic-regexp` whenever authorEmails is
+ * used (see that function's own comment: `grep.patternType` is a
+ * user/repo-configurable DEFAULT, not something this code can rely on
+ * without forcing it explicitly). Under BRE, extended/PCRE syntax
+ * characters `+`/`?`/`(`/`)`/`{`/`}`/`|` are ALL literal unless
+ * backslash-escaped (escaping them is what turns them INTO metacharacters —
+ * a GNU BRE extension, the exact opposite of ERE), so escaping them here
+ * would be wrong, not merely unnecessary (verified against a real git
+ * plus-tag-address commit: an escaped `\+` matched nothing, the bare `+`
+ * matched correctly). Only `.` `*` `^` `$` `[` `]` `\` are BRE
+ * metacharacters in their own right and need escaping to be treated
+ * literally. This function and `--basic-regexp` are a matched pair — one
+ * without the other is a silent correctness bug (escape-only: breaks under
+ * `grep.patternType=extended`; flag-only: leaves `+`/etc. unescaped and
+ * meaningless under BRE).
+ */
+function escapeRegexForGitAuthor(email: string): string {
+  return email.replace(/[.*^$[\]\\]/g, "\\$&");
 }
 
 /**
@@ -118,8 +177,39 @@ export function getAllCommits(repoPath: string, opts: GetAllCommitsOptions = {})
     `--format=${RECORD_SEP}%H${FIELD_SEP}%ae${FIELD_SEP}%aI${FIELD_SEP}%cI${FIELD_SEP}%G?${FIELD_SEP}%P`,
   ];
   if (opts.since) args.push(`--since=${opts.since.toISOString()}`);
-  // Format string omitted — it's noisy separator bytes, not useful signal.
-  debugLog(`git log --reverse --numstat${opts.since ? ` --since=${opts.since.toISOString()}` : ""} (streaming)`);
+  if (opts.authorEmails && opts.authorEmails.length > 0) {
+    // REQUIRED, not defensive-only: `git log --author` interprets its
+    // pattern under `grep.patternType` (default "basic", but user- or
+    // repo-configurable to "extended"/"perl" via git config), and
+    // escapeRegexForGitAuthor's escaping is written specifically for BASIC
+    // regex semantics. Left to the ambient config, a repo/user with
+    // `grep.patternType=extended` would silently reinterpret the escaped
+    // pattern under ERE rules instead — verified empirically: with that
+    // config set, this exact escaping matches ZERO commits for a
+    // plus-tag address (a silent UNDERMATCH, which could flip a real
+    // attribution to false, the opposite direction from the "optimization
+    // only, JS filter is truth" safety margin this option is supposed to
+    // have). `--basic-regexp` on the command line overrides
+    // `grep.patternType` unconditionally, pinning the semantics
+    // escapeRegexForGitAuthor actually implements regardless of any
+    // config this process doesn't control.
+    args.push("--basic-regexp");
+    for (const email of opts.authorEmails) {
+      args.push(`--author=${escapeRegexForGitAuthor(email)}`);
+    }
+  }
+  // Format string AND the actual email patterns are both omitted here — the
+  // former is noisy separator bytes, the latter would leak an identity into
+  // --debug output pasted into a bug report (same paste-safety rationale as
+  // readHeadBlobContents' own debugLog, which logs a path COUNT and never
+  // the paths themselves). Only a count is logged.
+  debugLog(
+    `git log --reverse --numstat${opts.since ? ` --since=${opts.since.toISOString()}` : ""}${
+      opts.authorEmails?.length
+        ? ` --basic-regexp --author=<${opts.authorEmails.length} email pattern(s), redacted>`
+        : ""
+    } (streaming)`
+  );
 
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, { cwd: repoPath, stdio: ["ignore", "pipe", "pipe"] });

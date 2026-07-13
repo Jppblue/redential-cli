@@ -7,7 +7,7 @@
 // these tests don't depend on whatever global git config the machine
 // running them happens to have — see test/author-preselection.test.ts for
 // the same rationale applied to that command's own default-selection tests.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { executeExplainCommand } from "../src/explain-command.js";
 import { ScanError } from "../src/errors.js";
@@ -200,6 +200,79 @@ describe("executeExplainCommand", () => {
     expect(output).toContain("Claimed: no");
   });
 
+  // Quick win #2 (history-dominated repos follow-up — see
+  // docs/proof-graph-spike.md's "Scale hardening" -> "History-dominated
+  // repos" subsection): --since narrows the commit walk explain's
+  // attribution is computed over, without touching detection at all
+  // (detection reads the HEAD snapshot, independent of history). Built as a
+  // dedicated tmpdir case (rather than reusing fixtureDirectPattern as-is)
+  // because this needs explicit commit-date control fixtureDirectPattern's
+  // builder doesn't expose.
+  describe("--since narrowing", () => {
+    it("turns an attributed finding into not-attributed once the window excludes the user's commit, and the window shows up in the output", async () => {
+      const dir = createRepo();
+      dirs.push(dir);
+      commit(dir, {
+        message: "add stripe webhook handler",
+        authorName: USER.name,
+        authorEmail: USER.email,
+        authorDate: "2020-01-01T00:00:00Z",
+        files: {
+          "src/webhook.ts": [
+            'import Stripe from "stripe";',
+            'import { PrismaClient } from "@prisma/client";',
+            "",
+            'const stripe = new Stripe("sk_test_xxx-EXAMPLE-xxx");',
+            "const prisma = new PrismaClient();",
+            "",
+            "export async function handleWebhook(req, res) {",
+            '  const event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], secret);',
+            "  const existing = await prisma.payment.findUnique({ where: { id: event.id } });",
+            '  if (existing) return res.status(200).send("already processed");',
+            "  await prisma.payment.create({ data: { id: event.id } });",
+            '  res.status(200).send("ok");',
+            "}",
+            "",
+          ].join("\n"),
+        },
+      });
+
+      // No --since: full history is walked, the commit is in range, and the
+      // user's own added-lines diff touched the finding's supporting file.
+      const baseline = collectLog();
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/payment-webhook-flow",
+        author: [USER.email],
+        log: baseline.log,
+      });
+      const baselineOutput = baseline.lines.join("\n");
+      expect(baselineOutput).toContain("DIRECT");
+      expect(baselineOutput).toContain("Claimed: yes");
+      expect(baselineOutput).toContain("YES — your own added-lines diff touched");
+
+      // --since 2024-01-01 excludes the (2020) commit entirely — detection
+      // stays DIRECT (it's independent of history), but attribution flips:
+      // the user has no commits left in the window at all, so nothing can
+      // be claimed. The window itself shows up in the attribution line.
+      const narrowed = collectLog();
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/payment-webhook-flow",
+        author: [USER.email],
+        since: "2024-01-01",
+        log: narrowed.log,
+      });
+      const narrowedOutput = narrowed.lines.join("\n");
+      expect(narrowedOutput).toContain("DIRECT");
+      expect(narrowedOutput).toContain("Claimed: no");
+      expect(narrowedOutput).toContain(`no commits found for ${USER.email}`);
+      const attributionLine = narrowed.lines.find((l) => l.startsWith("Attribution"))!;
+      expect(attributionLine).toContain("window:");
+      expect(attributionLine).toContain("2024-01-01");
+    });
+  });
+
   // Scale hardening (see docs/proof-graph-spike.md's "Scale hardening"
   // subsection and src/proof-graph/infer.ts's INFER_WORK_BUDGET /
   // findInferredTriple): when the cross-file search hits its deterministic
@@ -234,5 +307,90 @@ describe("executeExplainCommand", () => {
     expect(output).toContain("Claimed: no");
     expect(output).toContain("exceeded the deterministic work budget");
     expect(output).toContain("degraded to AMBIGUOUS");
+  });
+
+  // Live progress (src/proof-graph/progress.ts): wired through this
+  // command's pipeline so a real, slow run isn't silent. Two invariants
+  // matter here more than the exact phase sequence (progress.test.ts
+  // already covers the reporter's own behavior in isolation): (1) zero
+  // contamination — enabling progress must never change a single byte of
+  // stdout, and every progress byte must land on stderr, never in `log`;
+  // (2) zero leakage — no fixture-derived path/function/email ever reaches
+  // stderr, only the fixed phase labels and plain numbers.
+  describe("live progress", () => {
+    it("enabled (isTTY: true): all progress bytes go to stderr (never `log`/stdout), and stdout is byte-identical to a run with progress disabled", async () => {
+      const dir = fixtureDirectPattern();
+      dirs.push(dir);
+
+      const stderrChunks: string[] = [];
+      const withProgress = collectLog();
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/payment-webhook-flow",
+        author: [USER.email],
+        log: withProgress.log,
+        isTTY: true,
+        progressWrite: (chunk) => stderrChunks.push(chunk),
+      });
+
+      const withoutProgress = collectLog();
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/payment-webhook-flow",
+        author: [USER.email],
+        log: withoutProgress.log,
+        isTTY: false,
+      });
+
+      // No contamination: stdout (the `log` lines) is identical whether or
+      // not progress was shown.
+      expect(withProgress.lines).toEqual(withoutProgress.lines);
+
+      // Progress actually happened, and only on stderr.
+      expect(stderrChunks.length).toBeGreaterThan(0);
+      const stderrOutput = stderrChunks.join("");
+      expect(stderrOutput).toContain("Scanning HEAD");
+      expect(stderrOutput).toContain("Analyzing structure");
+
+      // No leakage: none of this fixture's own distinctive, git-derived
+      // strings (a file path, a function name, the author's own email —
+      // the exact kind of thing this command's own stdout output DOES
+      // legitimately print, per its SCREEN vs BUNDLE boundary comment)
+      // ever reach the progress stream.
+      const forbiddenProbes = [
+        "src/webhook.ts",
+        "webhook.ts",
+        "handleWebhook",
+        USER.email,
+        "stripe",
+        "Stripe",
+        "constructEvent",
+      ];
+      for (const probe of forbiddenProbes) {
+        expect(stderrOutput).not.toContain(probe);
+      }
+      // And a strict charset allowlist, independent of the specific probes
+      // above (see progress.test.ts's own version of this check for the
+      // rationale): every byte is a fixed phase label or a plain number.
+      expect(stderrOutput).toMatch(/^[A-Za-z0-9 ./()%\r\n-]*$/);
+    });
+
+    it("non-TTY default (no isTTY, no progressWrite given): zero progress bytes reach the real process.stderr", async () => {
+      const dir = fixtureDirectPattern();
+      dirs.push(dir);
+      const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const { log } = collectLog();
+        await executeExplainCommand({
+          repoPath: dir,
+          skill: "payments/payment-webhook-flow",
+          author: [USER.email],
+          log,
+        });
+        expect(writeSpy).not.toHaveBeenCalled();
+      } finally {
+        writeSpy.mockRestore();
+      }
+    });
   });
 });

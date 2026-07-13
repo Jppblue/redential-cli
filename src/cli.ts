@@ -163,12 +163,18 @@ program
     collect,
     [] as string[]
   )
-  .action(async (skill: string, options: { repo: string; author: string[] }) => {
+  .option(
+    "--since <spec>",
+    'limit attribution to commits at/after this date — a relative window ("2years", "18months", "30days") or an absolute date ("2024-01-01"); see docs/scan.md'
+  )
+  .action(async (skill: string, options: { repo: string; author: string[]; since?: string }) => {
     await run(() =>
       executeExplainCommand({
         repoPath: resolve(options.repo),
         skill,
         author: options.author,
+        since: options.since,
+        isTTY: process.stdout.isTTY === true,
       })
     );
   });

@@ -34,7 +34,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { readHeadSnapshot } from "./proof-graph/snapshot.js";
-import { TscParserAdapter } from "./proof-graph/parser-adapter.js";
+import { TscParserAdapter, type ParsedFile } from "./proof-graph/parser-adapter.js";
 import { buildGraph } from "./proof-graph/graph.js";
 import { findAnchors, type AnchorHit, type AnchorKind } from "./proof-graph/anchors.js";
 import {
@@ -43,8 +43,10 @@ import {
   STRUCTURAL_SKILL_SLUG,
   type StructuralFinding,
 } from "./proof-graph/infer.js";
-import { getAllCommits, getConfiguredUserEmail } from "./git.js";
+import { createProgressReporter } from "./proof-graph/progress.js";
+import { getAllCommits, getConfiguredUserEmail, type RawCommit } from "./git.js";
 import { loadTaxonomySlugs } from "./skill-detect.js";
+import { parseSince, describeSince } from "./since.js";
 import { ScanError } from "./errors.js";
 
 export interface ExplainCommandOptions {
@@ -53,7 +55,29 @@ export interface ExplainCommandOptions {
   // Repeatable --author <email>; [] means "use the repo's own git config
   // user.email as the default" — see the non-interactive rationale below.
   author: string[];
+  // Raw --since spec ("2years", "18months", "2024-01-01" — see
+  // src/since.ts), same plumbing scan's own --since uses. Undefined walks
+  // full history. ATTRIBUTION SEMANTICS: --since can only NARROW the
+  // author's touched-file set — it turns attributed=true into false by
+  // excluding commits, never the reverse. It's an explicit user-requested
+  // narrowing of the evidence window, not a new inference: more history
+  // never removes attribution, and this option never adds any. See the
+  // attribution log line below, which names the window whenever it's
+  // active so the narrowing stays visible in the printed evidence.
+  since?: string;
   log?: (message: string) => void;
+  // True when stdout is an interactive terminal — cli.ts passes
+  // `process.stdout.isTTY`. Gates whether live progress is shown at all
+  // (src/proof-graph/progress.ts's own TTY-gate rationale: a piped stdout
+  // stays completely silent on stderr too). Tests set this explicitly
+  // instead of relying on a real TTY; undefined defers to
+  // createProgressReporter's own `process.stdout.isTTY` default.
+  isTTY?: boolean;
+  // Where progress bytes are written — ALWAYS stderr, NEVER the `log`
+  // callback above (which backs stdout, and must stay byte-identical
+  // whether or not progress is shown). Defaults to `process.stderr.write`;
+  // tests inject a collector. Only used when progress ends up enabled.
+  progressWrite?: (message: string) => void;
 }
 
 // Mirrors skill-detect.ts's own DEFAULT_TAXONOMY_PATH resolution (this file
@@ -235,6 +259,18 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
   const authorLabel =
     authorEmails.length > 0 ? authorEmails.join(", ") : "(none — no --author given and no git config user.email set)";
 
+  // Same src/since.ts spec/parsing scan's own --since uses (see
+  // ExplainCommandOptions.since's own attribution-semantics doc comment).
+  const sinceDate = opts.since !== undefined ? parseSince(opts.since, new Date()) : undefined;
+  const sinceLabel = opts.since !== undefined ? describeSince(opts.since) : undefined;
+
+  // Live stderr progress only (never stdout — see this file's own
+  // SCREEN vs BUNDLE boundary comment and progress.ts's header): a real run
+  // on a big repo can take tens of seconds with otherwise zero output,
+  // which reads as hung. Purely presentational; carries no detection logic
+  // and touches nothing this function wouldn't already compute.
+  const reporter = createProgressReporter({ enabled: opts.isTTY, write: opts.progressWrite });
+
   // Same pipeline sequence as test/proof-graph/detection.test.ts's
   // runPipeline: HEAD snapshot -> parse -> graph -> anchors -> the selected
   // author's own commits -> touched-files set -> classify. No error here is
@@ -242,18 +278,61 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
   // read failure) propagates exactly the way scan-command.ts lets
   // buildBundleInteractively's failures propagate, so cli.ts's single
   // ScanError/uncaught-error handling stays the one place that decides how
-  // it's reported.
-  const snapshot = await readHeadSnapshot(opts.repoPath);
-  const adapter = new TscParserAdapter();
-  const parsed = snapshot.map((f) => adapter.parse(f.path, f.content));
-  const graph = buildGraph(parsed);
-  const anchors = findAnchors(graph);
+  // it's reported. The whole pipeline is wrapped in try/finally purely so a
+  // mid-phase throw still clears the in-progress stderr line (reporter.done())
+  // before propagating — without this, a dangling progress line (e.g.
+  // "Reading history 1234/5000 (24%)") stays on the terminal and cli.ts's
+  // subsequent `Error: ...` line gets appended right after it instead of
+  // starting on a clean line. reporter.done() is safe to call twice (once
+  // here, once more below on the success path) — it's a no-op the second
+  // time (see progress.ts's own "done() is a silent no-op when no phase()
+  // was ever called" case, exercised by test/proof-graph/progress.test.ts:
+  // the first done() already resets the reporter to that exact no-phase
+  // state, so a second call hits the identical no-op branch).
+  let graph: ReturnType<typeof buildGraph>;
+  let findings: StructuralFinding[];
+  let userCommits: RawCommit[];
+  let userTouchedFiles: Set<string>;
+  try {
+    reporter.phase("Scanning HEAD");
+    const snapshot = await readHeadSnapshot(opts.repoPath, {
+      onProgress: (done, total) => reporter.tick(done, total),
+    });
 
-  const allCommits = await getAllCommits(opts.repoPath);
-  const userCommits = allCommits.filter((c) => authorEmailSet.has(c.email));
-  const userTouchedFiles = await collectUserTouchedFiles(opts.repoPath, userCommits);
+    reporter.phase("Parsing files");
+    const adapter = new TscParserAdapter();
+    const parsed: ParsedFile[] = [];
+    for (let i = 0; i < snapshot.length; i++) {
+      parsed.push(adapter.parse(snapshot[i].path, snapshot[i].content));
+      reporter.tick(i + 1, snapshot.length);
+    }
 
-  const findings = inferStructuralSkills(graph, anchors, userTouchedFiles);
+    reporter.phase("Building graph");
+    graph = buildGraph(parsed);
+
+    reporter.phase("Finding anchors");
+    const anchors = findAnchors(graph);
+
+    reporter.phase("Reading history");
+    // authorEmails here is a git-level OPTIMIZATION only (see git.ts's
+    // GetAllCommitsOptions.authorEmails doc comment) — the exact-equality JS
+    // filter right below stays the actual correctness boundary, unchanged.
+    const allCommits = await getAllCommits(opts.repoPath, {
+      since: sinceDate,
+      authorEmails: authorEmails.length > 0 ? authorEmails : undefined,
+    });
+    userCommits = allCommits.filter((c) => authorEmailSet.has(c.email));
+    userTouchedFiles = await collectUserTouchedFiles(opts.repoPath, userCommits, (done, total) =>
+      reporter.tick(done, total)
+    );
+
+    reporter.phase("Analyzing structure");
+    findings = inferStructuralSkills(graph, anchors, userTouchedFiles);
+  } finally {
+    reporter.done();
+  }
+  reporter.done();
+
   if (findings.length === 0) {
     throw new ScanError(
       `"${opts.skill}" was not detected in this repository — no payment/webhook-shaped structural signal found at all (no anchors, no "stripe" import anywhere in the current HEAD snapshot).`
@@ -285,7 +364,11 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
   log("");
 
   const supportingFiles = [...new Set(finding.anchors.map((a) => a.path))];
-  log(`Attribution (author: ${authorLabel}):`);
+  // Names the --since window right alongside the author set whenever it's
+  // active, so a narrowed evidence window is visible in the output itself
+  // rather than only inferable from how the command was invoked — see
+  // ExplainCommandOptions.since's attribution-semantics doc comment.
+  log(`Attribution (author: ${authorLabel}${sinceLabel ? `, window: ${sinceLabel}` : ""}):`);
   if (userCommits.length === 0) {
     log(`  no commits found for ${authorLabel}`);
   } else {

@@ -17,6 +17,13 @@ export interface SnapshotOptions {
    * below) — bounds worst-case memory/time on a huge monorepo regardless of
    * how many individual files stay under maxFileBytes. Default: 5000. */
   maxFiles?: number;
+  /**
+   * Optional progress callback, invoked once per content-fetch batch with
+   * (files fetched so far, total files to fetch) — counts only, never a
+   * path (see src/proof-graph/progress.ts's content rule). Purely additive:
+   * every existing caller that doesn't pass this keeps working unchanged.
+   */
+  onProgress?: (done: number, total: number) => void;
 }
 
 const DEFAULT_MAX_FILE_BYTES = 200 * 1024;
@@ -29,7 +36,23 @@ const DEFAULT_MAX_FILES = 5000;
 // skill-detect.ts's DIFF_BATCH_SIZE, and it bounds how much file content is
 // ever in memory simultaneously to one batch's worth, not the whole
 // snapshot's.
-const CONTENT_BATCH_SIZE = 200;
+//
+// Raised from 200 to 1000 (measured): at 2000 files, 200 meant 10 batches —
+// each batch pays a fixed `git cat-file --batch` process-spawn cost on top
+// of its actual read work, and that per-batch overhead alone measured
+// ~300ms across those 10 batches (529ms at CONTENT_BATCH_SIZE=200 vs
+// ~850ms of overhead extrapolated for a from-scratch 1-batch run — see
+// docs/proof-graph-spike.md's "Scale hardening" -> "History-dominated
+// repos" subsection for the full A/B). 1000 still bounds worst-case memory
+// fine: 1000 files x the 200 KiB per-file cap (maxFileBytes) is a 200 MB
+// theoretical ceiling, and real TypeScript source files sit far below that
+// cap in practice, so a batch's actual in-memory footprint is a small
+// fraction of the theoretical worst case. Not raised further than 1000:
+// that's already a 5x reduction in batch count for the largest fixture this
+// spike is measured against (5000 files -> 5 batches instead of 25), and
+// pushing it higher stops buying much while growing the worst-case-memory
+// ceiling for no measured benefit.
+const CONTENT_BATCH_SIZE = 1000;
 
 /** `.d.ts`/`.d.tsx` declaration files carry no authored logic (just type
  * shapes, often generated) — never part of the structural graph the spike
@@ -143,6 +166,7 @@ export async function readHeadSnapshot(repoPath: string, opts: SnapshotOptions =
       // include a file with no content.
       if (content !== undefined) files.push({ path, content });
     }
+    opts.onProgress?.(Math.min(i + CONTENT_BATCH_SIZE, selectedPaths.length), selectedPaths.length);
   }
 
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
