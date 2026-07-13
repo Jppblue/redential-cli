@@ -16,7 +16,12 @@ import {
   USER,
   fixtureCommentsOnly,
   fixtureDirectPattern,
+  fixtureIapDirect,
   fixtureLayeredPattern,
+  fixtureLemonSqueezyManualHmacDirect,
+  fixtureMercadoPagoDirectNoIdempotency,
+  fixturePaddleDirect,
+  fixturePaypalDirect,
   fixtureStripeUnused,
 } from "./proof-graph/fixtures.js";
 import { generateBudgetBustingSourceFiles } from "./proof-graph/scale-fixtures.js";
@@ -390,6 +395,150 @@ describe("executeExplainCommand", () => {
         expect(writeSpy).not.toHaveBeenCalled();
       } finally {
         writeSpy.mockRestore();
+      }
+    });
+  });
+
+  // H6 phase 2c: `explain` now covers all 6 STRUCTURAL_PATTERNS entries
+  // (src/proof-graph/infer.ts), not just the original Stripe pattern — one
+  // happy-path test per NEW provider added in H6 phase 2a/2b, over the H6
+  // phase 2b fixtures (test/proof-graph/fixtures.ts), plus the
+  // known-limit-message test updated for the now-6-entry table.
+  describe("H6 multi-provider explain", () => {
+    it("paypal fixture: DIRECT classification, its own anchor kinds, and claimed yes", async () => {
+      const dir = fixturePaypalDirect();
+      dirs.push(dir);
+      const { log, lines } = collectLog();
+
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/paypal-webhook-flow",
+        author: [USER.email],
+        log,
+      });
+
+      const output = lines.join("\n");
+      expect(output).toContain("Skill: payments/paypal-webhook-flow");
+      expect(output).toContain("DIRECT");
+      expect(output).toContain("webhook-verification:");
+      expect(output).toContain("db-write:");
+      expect(output).toContain("idempotency-guard:");
+      expect(output).toContain("src/webhook.ts");
+      expect(output).toContain("Claimed: yes");
+    });
+
+    it("mercadopago fixture (no idempotency guard anywhere): confidence capped at INFERRED, not DIRECT, with the cap explanation line", async () => {
+      const dir = fixtureMercadoPagoDirectNoIdempotency();
+      dirs.push(dir);
+      const { log, lines } = collectLog();
+
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/mercadopago-flow",
+        author: [USER.email],
+        log,
+      });
+
+      const output = lines.join("\n");
+      expect(output).toContain("Skill: payments/mercadopago-flow");
+      expect(output).toContain("Classification: INFERRED");
+      // The connection itself is still same-function (the creation call and
+      // the DB write ARE co-located) — only the confidence is capped, per
+      // StructuralPattern.optionalAnchorKinds' own comment in infer.ts.
+      const connectionLine = lines.find((l) => l.startsWith("Connection:"))!;
+      expect(connectionLine).toContain("same-function");
+      const capLine = lines.find((l) => l.includes("Note: confidence is capped"))!;
+      expect(capLine).toBeDefined();
+      expect(capLine).toContain("capped at INFERRED, not DIRECT");
+      expect(capLine).toContain("idempotency-guard");
+      expect(capLine).toContain("missing everywhere in this repository");
+      expect(output).toContain("Claimed: yes");
+    });
+
+    it("lemon squeezy manual-HMAC fixture: DIRECT classification and claimed yes", async () => {
+      const dir = fixtureLemonSqueezyManualHmacDirect();
+      dirs.push(dir);
+      const { log, lines } = collectLog();
+
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/lemonsqueezy-webhook-flow",
+        author: [USER.email],
+        log,
+      });
+
+      const output = lines.join("\n");
+      expect(output).toContain("Skill: payments/lemonsqueezy-webhook-flow");
+      expect(output).toContain("DIRECT");
+      expect(output).toContain("webhook-verification:");
+      expect(output).toContain("manual HMAC verification");
+      expect(output).toContain("Claimed: yes");
+    });
+
+    it("paddle fixture: DIRECT classification and claimed yes", async () => {
+      const dir = fixturePaddleDirect();
+      dirs.push(dir);
+      const { log, lines } = collectLog();
+
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/paddle-webhook-flow",
+        author: [USER.email],
+        log,
+      });
+
+      const output = lines.join("\n");
+      expect(output).toContain("Skill: payments/paddle-webhook-flow");
+      expect(output).toContain("DIRECT");
+      expect(output).toContain("webhook-verification:");
+      expect(output).toContain("db-write:");
+      expect(output).toContain("idempotency-guard:");
+      expect(output).toContain("Claimed: yes");
+    });
+
+    it("iap fixture: DIRECT classification, its own iap-configure/iap-purchase/iap-entitlement-gate anchor kinds (not webhook/db-write/idempotency), and claimed yes", async () => {
+      const dir = fixtureIapDirect();
+      dirs.push(dir);
+      const { log, lines } = collectLog();
+
+      await executeExplainCommand({
+        repoPath: dir,
+        skill: "payments/iap-subscription-flow",
+        author: [USER.email],
+        log,
+      });
+
+      const output = lines.join("\n");
+      expect(output).toContain("Skill: payments/iap-subscription-flow");
+      expect(output).toContain("DIRECT");
+      expect(output).toContain("iap-configure:");
+      expect(output).toContain("iap-purchase:");
+      expect(output).toContain("iap-entitlement-gate:");
+      // iap-flow has no webhook/db-write/idempotency node at all (see
+      // anchors.ts's IAP section comment) — these must never appear.
+      expect(output).not.toContain("webhook-verification:");
+      expect(output).not.toContain("db-write:");
+      expect(output).not.toContain("idempotency-guard:");
+      expect(output).toContain("src/purchases.ts");
+      expect(output).toContain("Claimed: yes");
+    });
+
+    it("a valid but non-structural taxonomy slug: the known-limit message lists all 6 explainable slugs", async () => {
+      const dir = fixtureDirectPattern();
+      dirs.push(dir);
+
+      try {
+        await executeExplainCommand({ repoPath: dir, skill: "payments/stripe", author: [USER.email] });
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(ScanError);
+        const message = (err as Error).message;
+        expect(message).toContain("payments/payment-webhook-flow");
+        expect(message).toContain("payments/paypal-webhook-flow");
+        expect(message).toContain("payments/mercadopago-flow");
+        expect(message).toContain("payments/lemonsqueezy-webhook-flow");
+        expect(message).toContain("payments/paddle-webhook-flow");
+        expect(message).toContain("payments/iap-subscription-flow");
       }
     });
   });

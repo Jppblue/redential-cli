@@ -134,14 +134,20 @@ Usage:
 redential explain payments/payment-webhook-flow [--repo <path>] [--author <email> ...]
 ```
 
-`<skill>` must be a slug in `taxonomy.json`. In the spike, only
+`<skill>` must be a slug in `taxonomy.json`. Originally (H4), only
 `payments/payment-webhook-flow` (`STRUCTURAL_SKILL_SLUG`,
-`src/proof-graph/infer.ts`) is actually explainable — this is the spike's one
-target shape. Any other valid taxonomy slug (e.g. `payments/stripe`, a
-plain import-matching slug) gets a friendly "not covered by explain in the
-spike" message and exits 1: the structural tier's whole point is the
-payments/webhook shape, and generalizing `explain` to Tier 1's import
-matches is out of this milestone's scope. An unknown slug (not in
+`src/proof-graph/infer.ts`) was explainable — the spike's one target shape at
+the time. As of H6 (see "Multi-provider expansion (H6)" below),
+`explain`'s gate is generalized: any slug present in
+`STRUCTURAL_PATTERNS` (`src/proof-graph/infer.ts`) is explainable, which is
+now all 6 structural patterns (Stripe, PayPal, Mercado Pago, Lemon Squeezy,
+Paddle, IAP/RevenueCat) — the pattern table itself is the source of truth
+for "which slugs does `explain` cover," not a single hardcoded name. Any
+other valid taxonomy slug (e.g. `payments/stripe`, a plain import-matching
+slug) gets a friendly "not covered by explain in the spike" message,
+dynamically listing every explainable slug from the table, and exits 1:
+generalizing `explain` to Tier 1's plain import matches is still out of
+scope for the whole spike, structural or not. An unknown slug (not in
 `taxonomy.json` at all) is a usage error citing `taxonomy.json` as the
 vocabulary source, also exit 1.
 
@@ -755,3 +761,200 @@ needed to close the specific 49%-of-wall gap measured above):
   because it's a smaller fraction of the total and (unlike the git-level
   author filter) would add real concurrency-correctness surface — not
   attempted in this milestone.
+
+## Multi-provider expansion (H6)
+
+A follow-up milestone, after H5's GO recommendation, widening the
+structural tier from ONE pattern (Stripe webhook → DB write → idempotency
+guard) to SIX: the original Stripe pattern plus PayPal, Mercado Pago, Lemon
+Squeezy, Paddle (all the same "webhook-flow" shape family) and RevenueCat/
+IAP (its own, unrelated shape). Same invariants as the rest of the spike,
+unconditionally: zero network, zero LLM, in-memory-only graph, closed
+vocabulary — every new slug (`payments/paypal-webhook-flow`,
+`payments/mercadopago-flow`, `payments/lemonsqueezy-webhook-flow`,
+`payments/paddle-webhook-flow`, `payments/iap-subscription-flow`) was added
+to `taxonomy.json` (minor bump, `1.4.0 → 1.5.0`) BEFORE any code could
+produce it, matching every other slug in this spike's history. Nothing
+here touches `schema/`, `src/build-bundle.ts`, or `submit` — the structural
+signal stays out of the bundle for the whole spike, unchanged from H5's
+"Approved decisions" #2.
+
+### The descriptor-table approach
+
+Phase 1 of H6 generalized `src/proof-graph/anchors.ts`'s single hardcoded
+Stripe recognizer into a `WEBHOOK_PROVIDERS: WebhookProviderDescriptor[]`
+table — package specifiers, verify-call chain suffixes, and signature-header
+literals, one entry per provider — walked by one shared `webhookHits`
+function instead of one function per provider. Landed with exactly ONE
+entry (Stripe) as an intentionally provable no-op: the refactor's own test
+suite (H2's 25 tests, H3's 5 end-to-end fixtures) passed UNMODIFIED, proving
+the abstraction changed no observable behavior before a second provider was
+ever added. `src/proof-graph/infer.ts` mirrors the same shape:
+`STRUCTURAL_PATTERNS: StructuralPattern[]`, one entry per taxonomy slug,
+each carrying its own `anchorKinds` (which 3 anchor kinds make up its
+DIRECT/INFERRED shape, in the exact positional order
+`findSameFunctionTriple`/`findSameFileTriple`/`findInferredTriple` already
+expected) and `packages` (reused by the generalized AMBIGUOUS gate). Phase
+2a then added the 4 remaining webhook-flow descriptors plus IAP's own
+recognizer and pattern entry — see `src/proof-graph/anchors.ts`'s
+`WEBHOOK_PROVIDERS` and `src/proof-graph/infer.ts`'s `STRUCTURAL_PATTERNS`
+for the full tables and their own extensive inline rationale.
+
+Two of `WebhookProviderDescriptor`'s fields are ADDITIVE extensions, not
+present in the original table shape, each added for exactly one provider
+that didn't fit the original "dedicated verify-call" model:
+
+- **`creationChainSuffixes`** (Mercado Pago only). Mercado Pago's SDK has
+  no `verifyWebhookSignature`-style method at all — its shape is "create a
+  Preference/Payment" (the call that starts the flow) followed by an
+  IPN/webhook notification the provider sends back later (covered by the
+  existing `signatureLiterals` field). Rather than stretch
+  `verifyChainSuffixes`'s meaning ("this call verifies a signature") to
+  also cover "this call merely starts the flow," this is a separate,
+  explicitly-named field, checked the same way (receiver resolved to one
+  of `packages`, chain-suffix match) but producing a hit with a DIFFERENT
+  `reason` string, so `explain` output never claims a creation call is a
+  signature check it isn't.
+- **`manualHmacLiteral`** (Lemon Squeezy only). Lemon Squeezy's SDK exposes
+  no signature-verification helper either — their own docs show
+  hand-rolled HMAC verification instead (`createHmac(...)` +
+  `timingSafeEqual(...)`, co-located with the provider's signature header
+  literal, anywhere in the same file). This is the one documented exception
+  in the whole table to "webhook-verification always requires SOME
+  reference to the provider's own package": the rule fires even without
+  importing `@lemonsqueezy/lemonsqueezy.js` at all, because the real-world
+  pattern genuinely doesn't reference it.
+
+### Slug-per-provider decision
+
+Each of the 5 webhook-flow providers gets its OWN taxonomy slug
+(`payments/paypal-webhook-flow`, `payments/mercadopago-flow`, etc.) rather
+than collapsing them into one generic `payments/payment-webhook-flow` for
+every provider. Decided, not defaulted: the provider is part of the
+EVIDENCE and the LABEL a company sees on a proof bundle, not an
+implementation detail to abstract away — "this repo has a Mercado Pago
+integration" is a materially different, more useful claim than "this repo
+has *a* payment webhook integration," and collapsing the two would throw
+away real signal for no simplification a bundle consumer would want.
+
+### Mercado Pago's optional-anchor cap
+
+Mercado Pago is the one pattern with an `optionalAnchorKinds` entry:
+`idempotency-guard` is real, common, and provider-agnostic (shared with
+every other webhook-flow pattern), but not universal in real Mercado Pago
+integrations the way it's expected to be structurally reachable for the
+other 4 webhook-flow providers. The rule: when `idempotency-guard` is
+present anywhere in the repo, Mercado Pago classifies exactly like every
+other webhook-flow pattern (DIRECT/INFERRED/AMBIGUOUS over the full
+3-anchor shape). When it's globally ABSENT (zero anchors of that kind
+anywhere), the pattern still classifies — via a 2-kind PAIR search over just
+`webhook-verification`/`db-write` (`findSameFunctionPair`/
+`findSameFilePair`/`findInferredPair`, additive siblings of the existing
+triple-search functions) — but the resulting `confidence` is CAPPED at
+`inferred` regardless of which connectivity tier the pair search actually
+found: even a same-function pair, which for a normal 3-kind pattern would
+be DIRECT, comes out `inferred` here. `connection` still reports the ACTUAL
+topology found (same-function / same-file / cross-file); only `confidence`
+is capped, so `redential explain` stays fully honest about both facts at
+once — see `src/explain-command.ts`'s `cappedOptionalAnchorKind` (H6 phase
+2c) for how `explain` derives and surfaces this from the finding's own
+public fields (there is no dedicated `capped` field on `StructuralFinding`;
+the derivation is documented inline there) and prints an explicit note
+distinguishing "capped because idempotency-guard is missing" from a
+genuine cross-file INFERRED finding.
+
+### IAP/RevenueCat's own shape and known gaps
+
+An in-app-purchase flow has no webhook at all, so IAP doesn't reuse the
+webhook-flow shape — it gets its own 3 anchor kinds (`iap-configure`,
+`iap-purchase`, `iap-entitlement-gate`, see `AnchorKind` in
+`src/proof-graph/anchors.ts`) and its own `StructuralPattern` entry
+(`kind: "iap-flow"`), reusing the SAME `findSameFunctionTriple`/
+`findSameFileTriple`/`findInferredTriple` machinery unchanged — none of
+those functions ever inspect `AnchorHit.kind`, only `path`/
+`enclosingFunction`, so a second, unrelated 3-kind shape needed zero changes
+to the search functions themselves, only a second table entry naming its
+own 3 kinds.
+
+Two documented, accepted gaps, carried over honestly rather than fixed
+under this milestone's timebox:
+
+- **Entitlement-gate is call-shape only.** `iapEntitlementGateHits` only
+  recognizes a CALL whose chain contains an `"entitlements"` segment
+  (e.g. `customerInfo.entitlements.active.get('pro')`). The single most
+  common real-world RevenueCat shape,
+  `if (customerInfo.entitlements.active['pro'])`, is a bare property/
+  element-access expression — not a `CallExpression` — so it produces no
+  `ParsedCall` at all and this rule can't see it. Assigning it to a
+  `const` first is captured as a `ParsedBinding`, but `ParsedBinding`
+  carries no line/`enclosingFunction` (deliberately kept off this
+  milestone's scope), so there is no `AnchorHit` this rule could honestly
+  construct from a binding alone. Fixtures use a made-up CALL-shaped
+  entitlement check specifically to exercise the rule despite this gap
+  (see `test/proof-graph/fixtures.ts`'s IAP section comment).
+- **Paddle's construction-only gap.** A bare `new Paddle(...)` /
+  `new Preference(...)` (Mercado Pago has the same gap) that's never
+  followed by the actual verify/creation call produces no hit at all —
+  `parser-adapter.ts` only tracks `CallExpression` nodes as `ParsedCall`, so
+  a `NewExpression` used purely as a binding's initializer, with no
+  method call chained off the resulting object anywhere else, is invisible
+  to every recognizer in this file. In practice every real Paddle/Mercado
+  Pago integration DOES follow construction with the actual verify/create
+  call, so this gap is expected to be invisible on real repos — the same
+  reasoning `WebhookProviderDescriptor.creationChainSuffixes`' own comment
+  already applies to Mercado Pago specifically.
+
+### The `x-signature` collision
+
+Mercado Pago's real IPN/webhook header (`x-signature`) and Lemon Squeezy's
+own signature literal are the SAME string. `manualHmacLiteral`'s rule
+doesn't check for the ABSENCE of a Mercado Pago import, so a file that
+hand-rolls HMAC verification (Lemon Squeezy's shape) AND happens to also
+import `"mercadopago"` (or just contains the `"x-signature"` literal for an
+unrelated reason) could, in principle, produce BOTH a Lemon Squeezy
+manual-HMAC hit and a Mercado Pago file-level-fallback hit in the same
+file. Accepted, not fixed, for three reasons: (a) it still requires the
+SAME file to independently satisfy Mercado Pago's OWN package-import gate
+too — the manual-HMAC rule doesn't relax anything about the OTHER
+provider's own matching; (b) a Mercado Pago IPN handler hand-rolling HMAC
+with `timingSafeEqual` specifically is not how that SDK's integrations are
+typically written; (c) even if both fire, `infer.ts`'s per-pattern
+`providerSlug` filtering keeps each pattern's classification looking ONLY
+at its own `webhook-verification` hits — a spurious extra hit for provider
+A never pollutes provider B's triple/pair search. See
+`test/proof-graph/anchors.test.ts`'s dedicated collision-shaped test.
+
+### DSL threshold reached (not implemented)
+
+The "Migration & DSL thresholds" section above (H5) set the bar for a
+declarative pattern DSL in `signatures/*.json` at "3+ real structural
+patterns beyond the current payments/webhook one" — the point where a
+shared abstraction across patterns becomes visible enough to design well,
+rather than guessed at from a single example. H6 crosses that threshold: 6
+patterns now exist as hand-written TypeScript table entries
+(`WEBHOOK_PROVIDERS` in `anchors.ts`, `STRUCTURAL_PATTERNS` in `infer.ts`).
+This is recorded here as INPUT for a future decision, not acted on: the
+descriptor-table shape that emerged organically across H6's 6 entries (
+`packages`/chain-suffix/literal fields, plus the two additive extensions
+above) is itself a reasonable starting sketch for what a DSL's schema could
+look like, if and when that discussion happens. Nothing about the DSL
+question was decided or implemented this milestone.
+
+### Testing posture
+
+Each of the 5 new patterns got the same fixture shape used for Stripe in
+H3: connected/one-file → DIRECT, layered/3-file relative-import chain →
+INFERRED, package imported but structurally unused (alongside an unrelated,
+fully-connected Stripe pattern in the same commit, proving a *different*
+provider's own anchors never leak into this provider's AMBIGUOUS finding)
+→ AMBIGUOUS/not claimed, and full pattern present but committed by a
+different author → detected but not attributed. Mercado Pago additionally
+gets a 5th fixture pair (the cap case and the cap-lifted-by-upsert case) for
+its `optionalAnchorKinds` rule specifically. All fixtures are the usual tiny
+tmpdir git repos (`test/proof-graph/fixtures.ts`), never committed history.
+`test/privacy/proof-graph-boundaries.test.ts` extends its own "structural
+slug never enters the bundle" assertion from the one original slug to all 6,
+over two scanned bundles (the original Stripe-only fixture, plus one
+non-vacuous PayPal-shaped fixture for the new tier), keeping the existing
+Stripe/PayPal Tier-1 positive controls that prove each scan actually looked
+at real content rather than an empty repo.

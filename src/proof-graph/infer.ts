@@ -16,32 +16,26 @@ import { loadTaxonomySlugs } from "../skill-detect.js";
 import { getCommitsAddedLines, type RawCommit } from "../git.js";
 import { isExcludedPath } from "../churn-exclusions.js";
 import { ScanError } from "../errors.js";
-import { WEBHOOK_PROVIDERS } from "./anchors.js";
-import type { AnchorHit } from "./anchors.js";
+import { WEBHOOK_PROVIDERS, IAP_PACKAGES } from "./anchors.js";
+import type { AnchorHit, AnchorKind } from "./anchors.js";
 import type { ProofGraph } from "./graph.js";
 
 // -----------------------------------------------------------------------
-// STRUCTURAL_PATTERNS — H6 phase 1: this module now iterates a pattern
-// table instead of hardcoding the single Stripe/webhook shape below. `kind`
-// is a discriminated-union tag so a later milestone (H6 phase 2) can add a
-// distinct "iap-flow" kind (RevenueCat-style in-app-purchase flows, which
-// don't have a "webhook verification" node the same way — a different
-// connected shape entirely) additively, without touching this union's
-// existing "webhook-flow" member or any code that already narrows on it.
-// Phase 1 implements ONLY "webhook-flow" logic; adding the "iap-flow"
-// variant to this union without also adding its classification logic is
-// intentionally out of scope here (see this milestone's own task doc).
+// STRUCTURAL_PATTERNS — H6 phase 1 made this module iterate a pattern table
+// instead of hardcoding the single Stripe/webhook shape. `kind` is a
+// discriminated-union tag; phase 2a (this file's current state) adds the
+// "iap-flow" member it was left room for — RevenueCat-style in-app-purchase
+// flows, which have no "webhook verification" node at all, a genuinely
+// different connected shape (see anchors.ts's own IAP section comment).
 //
-// Today STRUCTURAL_PATTERNS is derived 1:1 from WEBHOOK_PROVIDERS
-// (anchors.ts) and therefore has exactly ONE entry (Stripe) — same
-// intentionally-provable-no-op posture as WEBHOOK_PROVIDERS' own comment:
-// inferStructuralSkills below now loops over this table instead of a single
-// hardcoded slug, but with one entry the observable behavior is
-// byte-for-byte identical to before this refactor. Phase 2 adds the
-// remaining webhook providers (they appear here automatically, with zero
-// change to this file, the moment they're added to WEBHOOK_PROVIDERS) plus
-// eventually an "iap-flow" pattern with its own packages/logic.
-export type StructuralPatternKind = "webhook-flow";
+// Phase 1's table was derived 1:1 from WEBHOOK_PROVIDERS (anchors.ts) and
+// had exactly one entry (Stripe) — an intentionally-provable-no-op posture.
+// Phase 2a's 4 new webhook providers (PayPal, Mercado Pago, Lemon Squeezy,
+// Paddle) still appear here automatically, with zero change to THIS file,
+// the moment they're added to WEBHOOK_PROVIDERS — see WEBHOOK_FLOW_PATTERNS
+// below. The one new "iap-flow" entry is a hand-written literal instead,
+// since it isn't derived from WEBHOOK_PROVIDERS at all.
+export type StructuralPatternKind = "webhook-flow" | "iap-flow";
 
 export interface StructuralPattern {
   /** Taxonomy slug (taxonomy.json) this pattern's classification produces. */
@@ -50,13 +44,93 @@ export interface StructuralPattern {
   /** npm specifiers that identify this pattern's provider/library — reused
    * by the generalized AMBIGUOUS gate below (see hasExternalImportForPackages). */
   packages: string[];
+  /**
+   * The 3 anchor kinds (in the SAME positional order
+   * findSameFunctionTriple/findSameFileTriple/findInferredTriple's first/
+   * second/third parameters expect) that make up this pattern's
+   * DIRECT/INFERRED connected shape. `anchorKinds[0]` is this pattern's
+   * PRIMARY anchor by convention — the one whose lone presence (without the
+   * other two) already means "ambiguous", not "nothing at all" (mirrors how
+   * a webhook-verification anchor alone already meant that for the
+   * single-pattern phase-1 version of this module; see the AMBIGUOUS gate
+   * below).
+   *
+   * For every "webhook-flow" pattern this is
+   * ["webhook-verification","db-write","idempotency-guard"] — the exact
+   * shape findSameFunctionTriple/findSameFileTriple/findInferredTriple were
+   * originally written for. "iap-flow" uses this SAME machinery with its
+   * own, entirely different 3 kinds
+   * (["iap-configure","iap-purchase","iap-entitlement-gate"]) — this needed
+   * ZERO changes to those three functions, because none of them ever
+   * inspects AnchorHit.kind itself; they only compare `path`/
+   * `enclosingFunction` between whatever 3 AnchorHit arrays their caller
+   * passes in. The "generalization over which 3 kinds" this milestone's
+   * task asked for therefore lives entirely in this field plus
+   * anchorsForPatternKind below, not in the search functions.
+   */
+  anchorKinds: [AnchorKind, AnchorKind, AnchorKind];
+  /**
+   * OPTIONAL (H6 phase 2a, Mercado Pago only today) — ADDITIVE. Per-pattern
+   * anchor kinds that are NOT required for a finding to exist at all, but
+   * CAP the resulting confidence when globally absent (zero anchors of that
+   * kind anywhere in the repo — idempotency-guard is provider-agnostic/
+   * shared across every pattern, so "for this pattern" and "globally" are
+   * the same check; see anchorsForPatternKind). Mercado Pago's shape is
+   * creation-call + webhook/IPN -> DB write, with an idempotency guard
+   * being common but not universal in real integrations: when it's
+   * present, this pattern classifies exactly like any other webhook-flow
+   * pattern (DIRECT reachable); when it's missing, the pattern still
+   * classifies — via the 2-kind PAIR search (findSameFunctionPair/
+   * findSameFilePair/findInferredPair, additive siblings of the existing
+   * triple functions, added because degrading a 3-ary function to 2
+   * arguments would have needed a signature change the "reuse... byte for
+   * byte" plan above deliberately avoided) — but the resulting confidence
+   * is capped at `maxConfidenceWithoutOptional` REGARDLESS of which
+   * connectivity tier the pair search found (so even a same-function pair
+   * — which for a normal 3-kind pattern would be DIRECT — comes out
+   * "inferred" here): a payment webhook flow with no idempotency guard
+   * anywhere in the repo is real, provable connectivity, but not the same
+   * strength of claim as one that also guards against double-processing.
+   * `connection` still reports the ACTUAL topology found (same-function /
+   * same-file / cross-file) — only `confidence` is capped, so `explain`
+   * output stays fully honest about both facts at once.
+   *
+   * Data-shaped (a table entry, not an if/else in inferStructuralSkills) so
+   * a future pattern with its own optional-kind rule is a table edit, not
+   * new branching logic.
+   */
+  optionalAnchorKinds?: { kind: AnchorKind; maxConfidenceWithoutOptional: StructuralConfidence }[];
 }
 
-export const STRUCTURAL_PATTERNS: StructuralPattern[] = WEBHOOK_PROVIDERS.map((provider) => ({
-  slug: provider.slug,
-  kind: "webhook-flow",
-  packages: provider.packages,
-}));
+const WEBHOOK_FLOW_ANCHOR_KINDS: [AnchorKind, AnchorKind, AnchorKind] = ["webhook-verification", "db-write", "idempotency-guard"];
+
+// Mercado Pago's own slug, per its WEBHOOK_PROVIDERS descriptor in
+// anchors.ts — matched by slug (not by object identity) because
+// STRUCTURAL_PATTERNS derives fresh objects from WEBHOOK_PROVIDERS below,
+// not the descriptors themselves.
+const MERCADOPAGO_SLUG = "payments/mercadopago-flow";
+
+export const STRUCTURAL_PATTERNS: StructuralPattern[] = [
+  ...WEBHOOK_PROVIDERS.map(
+    (provider): StructuralPattern => ({
+      slug: provider.slug,
+      kind: "webhook-flow",
+      packages: provider.packages,
+      anchorKinds: WEBHOOK_FLOW_ANCHOR_KINDS,
+      // See StructuralPattern.optionalAnchorKinds' own comment for why
+      // Mercado Pago is the one pattern that gets this.
+      ...(provider.slug === MERCADOPAGO_SLUG
+        ? { optionalAnchorKinds: [{ kind: "idempotency-guard" as AnchorKind, maxConfidenceWithoutOptional: "inferred" as StructuralConfidence }] }
+        : {}),
+    })
+  ),
+  {
+    slug: "payments/iap-subscription-flow",
+    kind: "iap-flow",
+    packages: IAP_PACKAGES, // derived from anchors.ts's own IAP_PACKAGES — see that constant's own comment
+    anchorKinds: ["iap-configure", "iap-purchase", "iap-entitlement-gate"],
+  },
+];
 
 // Deprecated alias for the (today, only) Stripe pattern's slug — kept for
 // explain-command.ts and existing tests, which reference this constant by
@@ -132,6 +206,16 @@ function sortAnchorHits(hits: AnchorHit[]): AnchorHit[] {
 
 type Triple = [AnchorHit, AnchorHit, AnchorHit];
 
+// H6 phase 2a note (no behavior change — the two functions below are
+// UNCHANGED from phase 1, byte for byte): despite the `webhook`/`dbWrite`/
+// `idempotency` parameter names (kept as-is for readability against their
+// original, still-primary use case), neither function ever inspects
+// AnchorHit.kind — they only compare `path`/`enclosingFunction` across
+// whatever 3 arrays their caller passes in. inferStructuralSkills' "iap-
+// flow" pattern below reuses BOTH functions unchanged, passing
+// iap-configure/iap-purchase/iap-entitlement-gate anchors in those same 3
+// positional slots — see StructuralPattern.anchorKinds' own comment.
+//
 // Rule: at least one anchor of EACH of the 3 kinds where all three share
 // BOTH path and enclosingFunction. Iterates in sorted order so the first
 // match found is deterministic regardless of the input arrays' own order
@@ -161,6 +245,37 @@ function findSameFileTriple(webhook: AnchorHit[], dbWrite: AnchorHit[], idempote
     if (!d) continue;
     const i = idemSorted.find((x) => x.path === w.path);
     if (i) return [w, d, i];
+  }
+  return null;
+}
+
+// H6 phase 2a — ADDITIVE siblings of findSameFunctionTriple/
+// findSameFileTriple, added ONLY for Mercado Pago's "idempotency-guard
+// missing entirely" case (see StructuralPattern.optionalAnchorKinds' own
+// comment). A 2-ary version can't be expressed by calling the 3-ary
+// functions above with an empty third array — an empty group would just
+// make the innermost loop never execute, returning null unconditionally,
+// which is NOT "search for a connected PAIR" — so these are genuinely
+// separate, smaller functions rather than a parameter-count trick. Exact
+// same "first found, in sorted order, wins" determinism as their triple
+// counterparts.
+type Pair = [AnchorHit, AnchorHit];
+
+function findSameFunctionPair(a: AnchorHit[], b: AnchorHit[]): Pair | null {
+  const bSorted = sortAnchorHits(b);
+  for (const x of sortAnchorHits(a)) {
+    for (const y of bSorted) {
+      if (y.path === x.path && y.enclosingFunction === x.enclosingFunction) return [x, y];
+    }
+  }
+  return null;
+}
+
+function findSameFilePair(a: AnchorHit[], b: AnchorHit[]): Pair | null {
+  const bSorted = sortAnchorHits(b);
+  for (const x of sortAnchorHits(a)) {
+    const y = bSorted.find((z) => z.path === x.path);
+    if (y) return [x, y];
   }
   return null;
 }
@@ -494,6 +609,84 @@ function findInferredTriple(
   return { result: { triple, edgeDistance: best.edgeDistance }, bounded: false };
 }
 
+// H6 phase 2a — ADDITIVE sibling of findInferredTriple, for Mercado Pago's
+// "idempotency-guard globally missing" case only (see
+// StructuralPattern.optionalAnchorKinds' own comment and
+// findSameFunctionPair's own comment on why a smaller dedicated function,
+// not a parameter trick on the 3-ary version). Same MAX_EDGE_DISTANCE cap,
+// same SHARED SearchBudgetState/distanceCache (a pair search costs
+// strictly LESS work than a triple search over the same files — one nested
+// loop instead of two — so reusing the same budget only ever makes it
+// EASIER to stay under INFER_WORK_BUDGET, never harder), same "never
+// claims from an incomplete search" posture (`bounded: true` on budget
+// exhaustion, discarding whatever partial best existed).
+function findInferredPair(
+  adjacency: Map<string, Set<string>>,
+  a: AnchorHit[],
+  b: AnchorHit[],
+  budget: SearchBudgetState
+): { result: { pair: Pair; edgeDistance: number } | null; bounded: boolean } {
+  const distinctSortedPaths = (hits: AnchorHit[]): string[] => {
+    const seen = new Set<string>();
+    const paths: string[] = [];
+    for (const hit of sortAnchorHits(hits)) {
+      if (!seen.has(hit.path)) {
+        seen.add(hit.path);
+        paths.push(hit.path);
+      }
+    }
+    return paths;
+  };
+
+  const aFiles = distinctSortedPaths(a);
+  const bFiles = distinctSortedPaths(b);
+
+  let bounded = false;
+
+  const distanceCache = budget.distanceCache;
+  const distanceBetween = (x: string, y: string): number => {
+    if (x === y) return 0;
+    let fromX = distanceCache.get(x);
+    if (!fromX) {
+      fromX = bfsDistances(adjacency, x);
+      distanceCache.set(x, fromX);
+      budget.workUnits += fromX.size;
+    }
+    return fromX.get(y) ?? Number.POSITIVE_INFINITY;
+  };
+
+  let best: { aPath: string; bPath: string; edgeDistance: number } | null = null;
+
+  searchLoop: for (const aPath of aFiles) {
+    for (const bPath of bFiles) {
+      budget.workUnits++; // one file-pair evaluation
+      if (budget.workUnits > INFER_WORK_BUDGET) {
+        bounded = true;
+        break searchLoop;
+      }
+      const distance = distanceBetween(aPath, bPath);
+      if (budget.workUnits > INFER_WORK_BUDGET) {
+        bounded = true;
+        break searchLoop;
+      }
+      if (distance > MAX_EDGE_DISTANCE) continue;
+      if (!best || distance < best.edgeDistance) best = { aPath, bPath, edgeDistance: distance };
+    }
+  }
+
+  if (bounded) return { result: null, bounded: true };
+  if (!best) return { result: null, bounded: false };
+
+  const pickRepresentativeAnchor = (hits: AnchorHit[], path: string): AnchorHit => {
+    const found = sortAnchorHits(hits).find((h) => h.path === path);
+    if (!found) throw new ScanError(`Internal error: no anchor found for path "${path}" while resolving an INFERRED pair.`);
+    return found;
+  };
+
+  const pair: Pair = [pickRepresentativeAnchor(a, best.aPath), pickRepresentativeAnchor(b, best.bPath)];
+  return { result: { pair, edgeDistance: best.edgeDistance }, bounded: false };
+}
+
 // -----------------------------------------------------------------------
 // AMBIGUOUS
 // -----------------------------------------------------------------------
@@ -549,37 +742,76 @@ function buildFinding(
   return finding;
 }
 
+// Resolves the AnchorHit array for one (pattern, anchorKind) pair.
+// "webhook-verification" is the one kind that needs PER-PATTERN filtering
+// (by AnchorHit.providerSlug — a payment-webhook-flow pattern must never
+// see another provider's webhook hits); every other kind (db-write,
+// idempotency-guard, and the 3 iap-* kinds) is provider-agnostic (see
+// WEBHOOK_PROVIDERS' own comment in anchors.ts and anchors.ts's IAP section
+// comment) and therefore SHARED across every pattern that uses it — cached
+// by kind in `cache` so it's still only filtered once per distinct kind
+// across the whole inferStructuralSkills call, same "computed once, not
+// re-filtered per pattern" posture the phase-1 version had for db-write/
+// idempotency-guard specifically.
+function anchorsForPatternKind(
+  anchors: AnchorHit[],
+  kind: AnchorKind,
+  pattern: StructuralPattern,
+  cache: Map<AnchorKind, AnchorHit[]>
+): AnchorHit[] {
+  if (kind === "webhook-verification") {
+    return anchors.filter((a) => a.kind === "webhook-verification" && a.providerSlug === pattern.slug);
+  }
+  let cached = cache.get(kind);
+  if (!cached) {
+    cached = anchors.filter((a) => a.kind === kind);
+    cache.set(kind, cached);
+  }
+  return cached;
+}
+
 /**
  * Classifies findAnchors' output into a connected shape PER PATTERN in
- * STRUCTURAL_PATTERNS (H6 phase 1: this used to target a single hardcoded
- * slug; today's single-entry table still produces at most one finding, but
- * the loop below is written to scale to N patterns without further change)
- * and attributes each finding to the caller-supplied touched-files set.
- * Deterministic: same graph + same anchors + same userTouchedFiles always
- * produce the same result array, sorted by slug.
+ * STRUCTURAL_PATTERNS and attributes each finding to the caller-supplied
+ * touched-files set. Deterministic: same graph + same anchors + same
+ * userTouchedFiles always produce the same result array, sorted by slug.
  *
- * For EACH pattern, classification order is first-match-wins, per the
- * milestone's rules — unchanged from the original single-pattern version,
- * just now scoped to one pattern's own webhook anchors (filtered by
- * AnchorHit.providerSlug === pattern.slug) at a time. db-write and
- * idempotency-guard anchors are provider-agnostic (see WEBHOOK_PROVIDERS'
- * own comment in anchors.ts) and therefore stay SHARED/unfiltered across
- * every pattern, computed once above the loop, exactly as before:
- *   1. DIRECT (same-function, else same-file) — only tried when all 3 kinds
- *      are present for this pattern (this pattern's webhook anchors, plus
- *      the shared db-write/idempotency anchors) at all.
+ * For EACH pattern, classification order is first-match-wins, scoped to
+ * that pattern's own 3 anchorKinds (see StructuralPattern.anchorKinds' own
+ * comment — `anchorsForPatternKind` above resolves each of the 3 kinds to
+ * the right AnchorHit array, filtering by providerSlug ONLY for
+ * "webhook-verification"):
+ *   1. DIRECT (same-function, else same-file) — only tried when all 3 of
+ *      this pattern's anchor kinds are present, UNLESS this pattern has an
+ *      optionalAnchorKinds entry whose kind is globally ABSENT (zero
+ *      anchors of that kind anywhere) — see step 1b.
+ *   1b. Mercado Pago's optional-idempotency case ONLY (see
+ *      StructuralPattern.optionalAnchorKinds' own comment): when the
+ *      optional kind is missing, run the 2-kind PAIR search
+ *      (findSameFunctionPair / findSameFilePair / findInferredPair) over
+ *      the remaining 2 required kinds instead, and cap the resulting
+ *      confidence at `maxConfidenceWithoutOptional` regardless of which
+ *      tier the pair search found — `connection` still reports the ACTUAL
+ *      topology found.
  *   2. INFERRED (cross-file, connected within <=3 edges) — only reached
- *      when DIRECT didn't fire, still gated on all 3 kinds present. Uses a
- *      SINGLE SearchBudgetState shared across every pattern in this call —
- *      see that type's own comment on why the never-hangs guarantee is
- *      per-run, not per-pattern.
+ *      when DIRECT (1 or 1b) didn't fire, still gated on the same
+ *      kind-presence rules. Uses a SINGLE SearchBudgetState shared across
+ *      every pattern AND every triple/pair search in this call — see that
+ *      type's own comment on why the never-hangs guarantee is per-run, not
+ *      per-pattern-or-search.
  *   3. AMBIGUOUS — reached whenever neither of the above fired (including
- *      "all 3 kinds present but not connected closely enough"), AND either
- *      this pattern's provider package is imported anywhere in the graph OR
- *      a webhook-verification anchor for THIS pattern exists on its own.
- *      Never claims (see StructuralFinding's own comment) — this is the one
- *      shape that surfaces ONLY via a future local-only `redential explain`
- *      (H4), never a bundle.
+ *      "all required kinds present but not connected closely enough"), AND
+ *      either this pattern's provider package is imported anywhere in the
+ *      graph OR this pattern's PRIMARY anchor kind (anchorKinds[0]) has a
+ *      hit on its own. Never claims (see StructuralFinding's own comment)
+ *      — this is the one shape that surfaces ONLY via a future local-only
+ *      `redential explain` (H4), never a bundle. Carries ONLY this
+ *      pattern's OWN anchors (this pattern's 3 anchorKinds, filtered the
+ *      same way as everywhere else in this function) — NOT the whole
+ *      cross-provider anchor pool findAnchors returned (fixed in H6 phase
+ *      2a, per the reviewer note on phase 1: an ambiguous finding used to
+ *      carry every anchor in the repo, including other providers'/
+ *      patterns' hits that have nothing to do with THIS finding).
  *   4. No finding at all for this pattern — no provider presence anywhere
  *      and no anchors for it: there is nothing shaped like this pattern to
  *      say anything about, not even tentatively.
@@ -593,9 +825,9 @@ export function inferStructuralSkills(
   // Closed-vocabulary defense in depth: enforced HERE, inside the function
   // real code calls (mirrors skill-detect.ts's compile()) — not just as a
   // standalone check a future refactor could unwire without failing any
-  // test. EVERY slug in STRUCTURAL_PATTERNS is checked (today: just the one
-  // Stripe slug) — if any pattern's slug is ever missing from taxonomy.json,
-  // this module can never produce a finding naming it.
+  // test. EVERY slug in STRUCTURAL_PATTERNS is checked — if any pattern's
+  // slug is ever missing from taxonomy.json, this module can never produce
+  // a finding naming it.
   const taxonomySlugs = loadTaxonomySlugs(opts.taxonomyPath);
   for (const pattern of STRUCTURAL_PATTERNS) {
     if (!taxonomySlugs.has(pattern.slug)) {
@@ -603,10 +835,9 @@ export function inferStructuralSkills(
     }
   }
 
-  // Provider-agnostic, shared across every pattern (see this function's own
-  // doc comment) — computed once, not re-filtered per pattern.
-  const dbWriteAnchors = anchors.filter((a) => a.kind === "db-write");
-  const idempotencyAnchors = anchors.filter((a) => a.kind === "idempotency-guard");
+  // Shared (non-provider-filtered) anchor-kind cache — see
+  // anchorsForPatternKind's own comment.
+  const sharedKindCache = new Map<AnchorKind, AnchorHit[]>();
 
   // Lazily built (only if some pattern actually reaches the cross-file
   // search) and memoized across the whole loop — file adjacency doesn't
@@ -621,22 +852,85 @@ export function inferStructuralSkills(
   const findings: StructuralFinding[] = [];
 
   for (const pattern of STRUCTURAL_PATTERNS) {
-    const webhookAnchors = anchors.filter((a) => a.kind === "webhook-verification" && a.providerSlug === pattern.slug);
+    const [kindA, kindB, kindC] = pattern.anchorKinds;
+    const anchorsA = anchorsForPatternKind(anchors, kindA, pattern, sharedKindCache);
+    const anchorsB = anchorsForPatternKind(anchors, kindB, pattern, sharedKindCache);
+    const anchorsC = anchorsForPatternKind(anchors, kindC, pattern, sharedKindCache);
+    // This pattern's OWN anchors only — used for every AMBIGUOUS finding
+    // below (see this function's own doc comment, step 3).
+    const ownAnchors = [...anchorsA, ...anchorsB, ...anchorsC];
 
-    if (webhookAnchors.length > 0 && dbWriteAnchors.length > 0 && idempotencyAnchors.length > 0) {
-      const sameFunction = findSameFunctionTriple(webhookAnchors, dbWriteAnchors, idempotencyAnchors);
+    const missingOptional = (pattern.optionalAnchorKinds ?? []).find(
+      (opt) => anchorsForPatternKind(anchors, opt.kind, pattern, sharedKindCache).length === 0
+    );
+
+    if (missingOptional) {
+      // Step 1b — see this function's own doc comment and
+      // StructuralPattern.optionalAnchorKinds' own comment.
+      const allKindHits: [AnchorKind, AnchorHit[]][] = [
+        [kindA, anchorsA],
+        [kindB, anchorsB],
+        [kindC, anchorsC],
+      ];
+      const requiredKindHits = allKindHits.filter(([kind]) => kind !== missingOptional.kind);
+
+      if (requiredKindHits.length === 2 && requiredKindHits[0][1].length > 0 && requiredKindHits[1][1].length > 0) {
+        const [first, second] = [requiredKindHits[0][1], requiredKindHits[1][1]];
+        const cap = missingOptional.maxConfidenceWithoutOptional;
+
+        const sameFunction = findSameFunctionPair(first, second);
+        if (sameFunction) {
+          findings.push(buildFinding(pattern.slug, cap, sameFunction, { kind: "same-function", edgeDistance: 0 }, userTouchedFiles));
+          continue;
+        }
+
+        const sameFile = findSameFilePair(first, second);
+        if (sameFile) {
+          findings.push(buildFinding(pattern.slug, cap, sameFile, { kind: "same-file", edgeDistance: 0 }, userTouchedFiles));
+          continue;
+        }
+
+        const inferredPair = findInferredPair(getAdjacency(), first, second, budget);
+        if (inferredPair.result) {
+          findings.push(
+            buildFinding(
+              pattern.slug,
+              cap,
+              inferredPair.result.pair,
+              { kind: "cross-file", edgeDistance: inferredPair.result.edgeDistance },
+              userTouchedFiles
+            )
+          );
+          continue;
+        }
+        if (inferredPair.bounded) {
+          findings.push(buildFinding(pattern.slug, "ambiguous", ownAnchors, null, userTouchedFiles, true));
+          continue;
+        }
+      }
+      // Neither required kind present, or present-but-not-connected: falls
+      // through to the shared AMBIGUOUS gate below, same as step 1's own
+      // fall-through.
+    } else if (anchorsA.length > 0 && anchorsB.length > 0 && anchorsC.length > 0) {
+      // Step 1/2 — the original (phase-1) triple logic, unchanged in spirit,
+      // now generalized over pattern.anchorKinds via anchorsA/B/C instead of
+      // hardcoded webhook/dbWrite/idempotency variables. findSameFunctionTriple/
+      // findSameFileTriple/findInferredTriple themselves are BYTE-FOR-BYTE
+      // unchanged (see their own comments) — this is the "reuse... generalized
+      // over which 3 kinds it looks for" the milestone asked for.
+      const sameFunction = findSameFunctionTriple(anchorsA, anchorsB, anchorsC);
       if (sameFunction) {
         findings.push(buildFinding(pattern.slug, "direct", sameFunction, { kind: "same-function", edgeDistance: 0 }, userTouchedFiles));
         continue;
       }
 
-      const sameFile = findSameFileTriple(webhookAnchors, dbWriteAnchors, idempotencyAnchors);
+      const sameFile = findSameFileTriple(anchorsA, anchorsB, anchorsC);
       if (sameFile) {
         findings.push(buildFinding(pattern.slug, "direct", sameFile, { kind: "same-file", edgeDistance: 0 }, userTouchedFiles));
         continue;
       }
 
-      const inferred = findInferredTriple(getAdjacency(), webhookAnchors, dbWriteAnchors, idempotencyAnchors, budget);
+      const inferred = findInferredTriple(getAdjacency(), anchorsA, anchorsB, anchorsC, budget);
       if (inferred.result) {
         findings.push(
           buildFinding(
@@ -653,29 +947,28 @@ export function inferStructuralSkills(
         // The cross-file search never finished — degrade to AMBIGUOUS with
         // `searchBounded` set (see findInferredTriple's own comment). All
         // three anchor kinds are already known to be present for this
-        // pattern at this point (the outer `if` above), so this always
+        // pattern at this point (the outer `else if` above), so this always
         // fires; falling through to the plain
-        // hasExternalImportForPackages/webhookAnchors check below would
-        // reach the same AMBIGUOUS outcome anyway, but WITHOUT the
-        // searchBounded flag a caller needs to tell "not connected" apart
-        // from "search cut short".
-        findings.push(buildFinding(pattern.slug, "ambiguous", anchors, null, userTouchedFiles, true));
+        // hasExternalImportForPackages/anchorsA check below would reach the
+        // same AMBIGUOUS outcome anyway, but WITHOUT the searchBounded flag
+        // a caller needs to tell "not connected" apart from "search cut
+        // short".
+        findings.push(buildFinding(pattern.slug, "ambiguous", ownAnchors, null, userTouchedFiles, true));
         continue;
       }
     }
 
-    if (hasExternalImportForPackages(graph, pattern.packages) || webhookAnchors.length > 0) {
-      // Whatever partial anchors currently exist (possibly none at all, e.g.
-      // this pattern's provider package imported but structurally unused —
-      // see the spike doc's H3 false-negative case) support this ambiguous
-      // finding.
-      findings.push(buildFinding(pattern.slug, "ambiguous", anchors, null, userTouchedFiles));
+    if (hasExternalImportForPackages(graph, pattern.packages) || anchorsA.length > 0) {
+      // Whatever partial anchors currently exist for THIS pattern (possibly
+      // none at all, e.g. this pattern's provider package imported but
+      // structurally unused — see the spike doc's H3 false-negative case)
+      // support this ambiguous finding. `ownAnchors` (this pattern's 3
+      // anchorKinds, already filtered) — never the whole cross-pattern pool.
+      findings.push(buildFinding(pattern.slug, "ambiguous", ownAnchors, null, userTouchedFiles));
     }
   }
 
-  // Deterministic output ordering across patterns (today: at most one
-  // finding, so this is a no-op sort — see this function's own doc comment
-  // on why the loop is still written to scale to N patterns).
+  // Deterministic output ordering across patterns, sorted by slug.
   return findings.sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
 }
 

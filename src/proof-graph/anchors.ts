@@ -14,7 +14,19 @@
 import type { ParsedCall, ParsedFile } from "./parser-adapter.js";
 import type { ProofGraph } from "./graph.js";
 
-export type AnchorKind = "webhook-verification" | "db-write" | "idempotency-guard";
+// H6 phase 2a: additive union extension for RevenueCat/IAP's own 3-anchor
+// shape (configure / purchase / entitlement-gate) — see the "IAP" section
+// below findAnchors' webhook/db-write/idempotency recognizers. IAP has no
+// "webhook verification" node at all (there's no webhook in an in-app
+// purchase flow), so it needed its own anchor kinds rather than being
+// squeezed into the webhook/db-write/idempotency shape.
+export type AnchorKind =
+  | "webhook-verification"
+  | "db-write"
+  | "idempotency-guard"
+  | "iap-configure"
+  | "iap-purchase"
+  | "iap-entitlement-gate";
 
 export interface AnchorHit {
   kind: AnchorKind;
@@ -30,16 +42,22 @@ export interface AnchorHit {
   // OPTIONAL, set ONLY on "webhook-verification" hits (H6 multi-provider
   // generalization): which WEBHOOK_PROVIDERS descriptor (below) produced
   // this hit, carried as the taxonomy slug that descriptor maps to — e.g.
-  // "payments/payment-webhook-flow" for Stripe. Added as an optional field
-  // rather than a required one so every existing AnchorHit-shaped test
+  // "payments/payment-webhook-flow" for Stripe, "payments/mercadopago-flow"
+  // for Mercado Pago, etc. (H6 phase 2a: WEBHOOK_PROVIDERS now has 5
+  // entries, not just Stripe — see that table below). Added as an optional
+  // field rather than a required one so every existing AnchorHit-shaped test
   // fixture and assertion (toMatchObject / field-by-field checks throughout
   // test/proof-graph/anchors.test.ts) keeps compiling and passing unchanged;
   // none of them do an exact-shape toEqual on a non-empty AnchorHit, which
   // is what made this route safe (see the H6 phase-1 task report). db-write
   // and idempotency-guard hits never set this — they are already
   // provider-agnostic (see WEBHOOK_PROVIDERS' own comment) and infer.ts's
-  // single-provider STRUCTURAL_PATTERNS loop (today: just Stripe) doesn't
-  // need it to disambiguate a triple.
+  // STRUCTURAL_PATTERNS loop needs it ONLY to disambiguate which provider's
+  // triple a webhook-verification hit belongs to; db-write/idempotency-guard
+  // anchors are intentionally shared/unfiltered across every pattern (see
+  // infer.ts's own comment on why). The three "iap-*" kinds (H6 phase 2a)
+  // never set this either — there is only ever one IAP pattern
+  // (payments/iap-subscription-flow), so there is nothing to disambiguate.
   providerSlug?: string;
 }
 
@@ -97,14 +115,19 @@ const PG_UPSERT_SQL = /on\s+conflict/i;
 // with a slug that isn't ALSO added to taxonomy.json produces a ScanError,
 // never a silent bundle leak.
 //
-// Phase 1 of H6 (this file's current state) ships ONLY the Stripe
-// descriptor — an intentionally provable no-op refactor: the recognizer
-// below now iterates this table instead of hardcoding Stripe's shape, but
-// with exactly one entry the observable behavior is byte-for-byte identical
-// to before the refactor. Phase 2 (a later milestone, not this one) adds
-// the remaining providers' descriptors (PayPal, Mercado Pago, Lemon
-// Squeezy, Paddle, RevenueCat/IAP) alongside their own fixtures and
-// `explain` support.
+// Phase 1 of H6 shipped ONLY the Stripe descriptor — an intentionally
+// provable no-op refactor: the recognizer iterates this table instead of
+// hardcoding Stripe's shape, and with exactly one entry the observable
+// behavior was byte-for-byte identical to before the refactor (see phase
+// 1's own commit/task report). Phase 2a (this file's current state) adds
+// the remaining 4 webhook-shaped providers below — PayPal, Mercado Pago,
+// Lemon Squeezy, Paddle — plus RevenueCat/IAP as an entirely separate
+// recognizer further down (IAP has no webhook node at all; see the IAP
+// section). Decision (documented per the milestone task): each provider
+// gets its OWN taxonomy slug rather than a generic
+// "payments/payment-webhook-flow" for all of them — the provider is part
+// of the evidence and the label a company sees, not an implementation
+// detail to collapse away.
 export interface WebhookProviderDescriptor {
   /** Taxonomy slug (taxonomy.json) this provider's webhook pattern produces. */
   slug: string;
@@ -124,6 +147,64 @@ export interface WebhookProviderDescriptor {
    * fallback exists and why it's intentionally weaker).
    */
   signatureLiterals: string[];
+  /**
+   * OPTIONAL (H6 phase 2a) — ADDITIVE extension for a provider whose
+   * webhook-flow anchor isn't a dedicated "verify" call at all, but a call
+   * that ALSO serves another purpose. Mercado Pago is the one provider that
+   * needs this today: its SDK has no `verifyWebhookSignature`-style method
+   * — the shape is "create a Preference/Payment" (the call that starts the
+   * flow, e.g. `preference.create(...)` / `payment.create(...)`) followed
+   * by an IPN/webhook notification Mercado Pago sends back (covered by
+   * `signatureLiterals` below, e.g. `x-signature`). Rather than stretch
+   * `verifyChainSuffixes`'s meaning ("this call verifies a signature") to
+   * cover "this call merely STARTS the flow", this is a separate,
+   * explicitly-named field: checked the SAME way as verifyChainSuffixes
+   * (receiver resolved to one of `packages`, chain suffix match) but
+   * produces a hit with a DIFFERENT reason string, so `explain` output
+   * never claims a creation call is a signature check it isn't. See
+   * webhookHits' own comment for the exact matching logic.
+   *
+   * Known parser-level gap (documented, not a bug): a bare
+   * `new Preference(...)` instantiation that's never followed by a
+   * `.create(...)` call produces no hit at all — parser-adapter.ts only
+   * tracks CallExpression nodes as ParsedCall (see its own module comment);
+   * a NewExpression used as a binding's initializer becomes a
+   * ParsedBinding, which webhookHits (like every anchor recognizer in this
+   * file) never scans directly. In practice every real Mercado Pago
+   * integration DOES follow construction with `.create(...)`, so this gap
+   * is expected to be invisible in real repos.
+   */
+  creationChainSuffixes?: string[][];
+  /**
+   * OPTIONAL (H6 phase 2a) — ADDITIVE, Lemon Squeezy-only today. A narrow
+   * special case: `createHmac(...)` + `timingSafeEqual(...)` calls
+   * anywhere in the SAME FILE as this literal count as manual webhook
+   * verification EVEN WITHOUT importing any of `packages` above — the one
+   * documented exception, in this whole table, to "webhook-verification
+   * always requires SOME reference to the provider's own package" (Lemon
+   * Squeezy's own SDK doesn't expose a signature-verification helper; their
+   * docs show hand-rolled HMAC instead, so gating this purely on the
+   * package import would miss the common real-world shape entirely).
+   *
+   * KNOWN, ACCEPTED COLLISION (documented per the milestone task, not
+   * fixed): Mercado Pago's `signatureLiterals` also includes "x-signature"
+   * (its real IPN header name), and this rule doesn't check for the
+   * ABSENCE of a Mercado Pago import — so a file that hand-rolls HMAC
+   * verification AND happens to also import "mercadopago" (or just
+   * contains the "x-signature" literal for an unrelated reason) could, in
+   * principle, produce BOTH a Lemon Squeezy manual-HMAC hit and a Mercado
+   * Pago file-level-fallback hit. Accepted because: (a) it requires the
+   * SAME file to independently satisfy Mercado Pago's OWN package-import
+   * gate too — the manual-HMAC rule doesn't relax anything about the OTHER
+   * provider's own matching; (b) a Mercado Pago IPN handler hand-rolling
+   * HMAC with `timingSafeEqual` specifically is not how that SDK's
+   * integrations are typically written; (c) even if both fire,
+   * infer.ts's per-pattern providerSlug filtering keeps each pattern's
+   * classification looking ONLY at its own hits — a spurious extra hit for
+   * provider A never pollutes provider B's triple/pair search. See
+   * anchors.test.ts's dedicated collision-shaped test.
+   */
+  manualHmacLiteral?: string;
 }
 
 export const WEBHOOK_PROVIDERS: WebhookProviderDescriptor[] = [
@@ -135,6 +216,60 @@ export const WEBHOOK_PROVIDERS: WebhookProviderDescriptor[] = [
       ["webhooks", "constructEventAsync"],
     ],
     signatureLiterals: ["stripe-signature"],
+  },
+  {
+    slug: "payments/paypal-webhook-flow",
+    packages: ["@paypal/checkout-server-sdk", "@paypal/paypal-server-sdk"],
+    // Both the legacy checkout-server-sdk and the newer paypal-server-sdk
+    // expose the verify call under a `verifyWebhookSignature` method name,
+    // either directly on the resolved client (`paypalClient
+    // .verifyWebhookSignature(...)`) or nested one level under a
+    // "webhooksController"-style sub-client
+    // (`paypalClient.webhooksController.verifyWebhookSignature(...)`) — kept
+    // to just these two suffixes, both ending in the one distinctive
+    // segment name, rather than trying to enumerate every SDK-version
+    // client-shape variant.
+    verifyChainSuffixes: [["verifyWebhookSignature"], ["webhooksController", "verifyWebhookSignature"]],
+    signatureLiterals: ["paypal-transmission-sig", "paypal-auth-algo"],
+  },
+  {
+    slug: "payments/mercadopago-flow",
+    packages: ["mercadopago"],
+    // No dedicated "verify" call on this SDK — see
+    // WebhookProviderDescriptor.creationChainSuffixes' own comment for the
+    // shape this provider actually uses instead.
+    verifyChainSuffixes: [],
+    // `new Preference(client)` / `new Payment(client)` followed by
+    // `.create(...)` — resolveReceiver's binding-resolution rule (rule 2)
+    // strips the constructor name itself (`Preference`/`Payment`) when
+    // splicing the binding's chain back in, so BOTH classes collapse to the
+    // exact same resolved chain here: `["create"]`. That collapse is
+    // intentional, not a loss of precision that matters for this
+    // recognizer — the milestone's own spec lists "new Preference /
+    // preference.create / payment.create" as equivalent anchor shapes, and
+    // this is the single suffix that captures all of them once resolved.
+    creationChainSuffixes: [["create"]],
+    // Mercado Pago's real IPN/webhook notification carries an
+    // "x-signature" header — same literal Lemon Squeezy also uses; see
+    // WebhookProviderDescriptor.manualHmacLiteral's own comment on the
+    // documented, accepted collision this creates.
+    signatureLiterals: ["x-signature"],
+  },
+  {
+    slug: "payments/lemonsqueezy-webhook-flow",
+    packages: ["@lemonsqueezy/lemonsqueezy.js"],
+    // No dedicated "verify" call either — Lemon Squeezy's own docs show
+    // hand-rolled HMAC verification (see manualHmacLiteral below), not an
+    // SDK helper method.
+    verifyChainSuffixes: [],
+    signatureLiterals: ["x-signature"],
+    manualHmacLiteral: "x-signature",
+  },
+  {
+    slug: "payments/paddle-webhook-flow",
+    packages: ["@paddle/paddle-node-sdk"],
+    verifyChainSuffixes: [["unmarshal"], ["webhooks", "unmarshal"]],
+    signatureLiterals: ["paddle-signature"],
   },
 ];
 
@@ -236,22 +371,41 @@ function webhookHits(graph: ProofGraph, path: string, file: ParsedFile): AnchorH
     const resolved = resolveReceiver(file, call);
     if (!resolved) continue;
     // H6: iterate WEBHOOK_PROVIDERS instead of hardcoding Stripe. With
-    // today's single-entry table this produces byte-for-byte the same
+    // today's single-entry table this produced byte-for-byte the same
     // decision as the old inline `resolved.specifier !== STRIPE_SPECIFIER`
-    // check — see WEBHOOK_PROVIDERS' own comment.
+    // check (phase 1); phase 2a added 4 more descriptors — see
+    // WEBHOOK_PROVIDERS' own comment.
     const provider = WEBHOOK_PROVIDERS.find((p) => p.packages.includes(resolved.specifier));
     if (!provider) continue;
-    const matchedSuffix = provider.verifyChainSuffixes.find((suffix) => matchesChainSuffix(resolved.chain, suffix));
-    if (!matchedSuffix) continue;
 
-    hits.push({
-      kind: "webhook-verification",
-      path,
-      enclosingFunction: call.enclosingFunction,
-      line: call.line,
-      reason: `${resolved.specifier}.${matchedSuffix.join(".")} (receiver resolved to import "${resolved.specifier}")`,
-      providerSlug: provider.slug,
-    });
+    const matchedVerifySuffix = provider.verifyChainSuffixes.find((suffix) => matchesChainSuffix(resolved.chain, suffix));
+    if (matchedVerifySuffix) {
+      hits.push({
+        kind: "webhook-verification",
+        path,
+        enclosingFunction: call.enclosingFunction,
+        line: call.line,
+        reason: `${resolved.specifier}.${matchedVerifySuffix.join(".")} (receiver resolved to import "${resolved.specifier}")`,
+        providerSlug: provider.slug,
+      });
+      continue; // a dedicated verify call already produced this call's hit; don't also test it against creationChainSuffixes
+    }
+
+    // H6 phase 2a: Mercado Pago-style "creation call counts as the webhook
+    // anchor" — see WebhookProviderDescriptor.creationChainSuffixes' own
+    // comment. Reason string is deliberately different from the verify-call
+    // branch above so `explain` never conflates the two.
+    const matchedCreationSuffix = provider.creationChainSuffixes?.find((suffix) => matchesChainSuffix(resolved.chain, suffix));
+    if (matchedCreationSuffix) {
+      hits.push({
+        kind: "webhook-verification",
+        path,
+        enclosingFunction: call.enclosingFunction,
+        line: call.line,
+        reason: `${resolved.specifier}.${matchedCreationSuffix.join(".")} (creation call counts as this provider's webhook anchor — receiver resolved to import "${resolved.specifier}"; see WebhookProviderDescriptor.creationChainSuffixes)`,
+        providerSlug: provider.slug,
+      });
+    }
   }
 
   // File-level fallback, explicitly weaker (per the milestone spec): a
@@ -279,6 +433,34 @@ function webhookHits(graph: ProofGraph, path: string, file: ParsedFile): AnchorH
       enclosingFunction: signatureLiteral.enclosingFunction,
       line: signatureLiteral.line,
       reason: `literal "${signatureLiteral.value}" present and file imports "${matchingSpecifier}" (weaker: file-level fallback, no receiver resolved)`,
+      providerSlug: provider.slug,
+    });
+  }
+
+  // H6 phase 2a — narrow special case (Lemon Squeezy only today, see
+  // WebhookProviderDescriptor.manualHmacLiteral's own comment): a file that
+  // hand-rolls HMAC verification (createHmac(...) AND timingSafeEqual(...)
+  // calls, anywhere in the file, in either order — chain suffix, not
+  // receiver-resolved, since a manual crypto helper is plain
+  // `import { createHmac, timingSafeEqual } from "node:crypto"`, not this
+  // provider's own package at all) co-located with the provider's signature
+  // literal counts as verification EVEN WITHOUT importing `packages` — the
+  // one place in this whole function a webhook-verification hit doesn't
+  // require any reference to the provider's own package.
+  for (const provider of WEBHOOK_PROVIDERS) {
+    if (!provider.manualHmacLiteral) continue;
+    const hasCreateHmac = file.calls.some((c) => c.chain[c.chain.length - 1] === "createHmac");
+    const hasTimingSafeEqual = file.calls.some((c) => c.chain[c.chain.length - 1] === "timingSafeEqual");
+    if (!hasCreateHmac || !hasTimingSafeEqual) continue;
+    const signatureLiteral = file.literals.find((l) => l.value === provider.manualHmacLiteral);
+    if (!signatureLiteral) continue;
+
+    hits.push({
+      kind: "webhook-verification",
+      path,
+      enclosingFunction: signatureLiteral.enclosingFunction,
+      line: signatureLiteral.line,
+      reason: `manual HMAC verification: "createHmac"+"timingSafeEqual" calls co-located with literal "${signatureLiteral.value}" (narrow special case: verification without importing "${provider.packages[0]}" — see WebhookProviderDescriptor.manualHmacLiteral)`,
       providerSlug: provider.slug,
     });
   }
@@ -420,6 +602,136 @@ function matchExplicitIdempotencyKey(call: ParsedCall): boolean {
 }
 
 // -----------------------------------------------------------------------
+// (d) IAP / RevenueCat — H6 phase 2a
+//
+// This provider's shape doesn't fit "webhook verified -> DB write ->
+// idempotency guard" at all: an in-app-purchase flow has no webhook (see
+// GOALS-proof-graph-spike.md's H6 task). Its own 3-anchor shape is:
+// configure the SDK, make a purchase call, gate access on entitlement
+// state. db-write/idempotency-guard are irrelevant here and never appear
+// in this section — infer.ts's "iap-flow" pattern uses these 3 kinds
+// instead (see that file's STRUCTURAL_PATTERNS entry).
+// -----------------------------------------------------------------------
+
+// Exported (not just an internal const) so infer.ts's STRUCTURAL_PATTERNS
+// "iap-flow" entry can derive its own `packages` field from the SAME list
+// rather than duplicating it — same single-source-of-truth rationale as
+// STRUCTURAL_PATTERNS' own `packages: provider.packages` derivation from
+// WEBHOOK_PROVIDERS.
+export const IAP_PACKAGES = ["react-native-purchases", "@revenuecat/purchases-js"];
+
+const IAP_PURCHASE_LAST_SEGMENTS = new Set(["purchasePackage", "purchaseProduct", "purchaseStoreProduct"]);
+
+/**
+ * configure + purchase hits. Primary rule: receiver resolved (via
+ * resolveReceiver, same mechanism every other recognizer in this file
+ * uses) to one of IAP_PACKAGES, with the resolved chain's LAST segment
+ * being "configure" (-> iap-configure) or one of the 3 tracked purchase
+ * verbs (-> iap-purchase). Fallback (weaker, no receiver resolved, same
+ * "co-location" posture as webhookHits' own literal fallback): engaged
+ * ONLY when the file imports an IAP package at all, for a call whose RAW
+ * chain either literally equals ["Purchases","configure"] (catches the
+ * common `Purchases.configure(...)` shape even in the rare case receiver
+ * resolution didn't fire) or whose raw last segment is one of the purchase
+ * verbs. The fallback is only ever tried for a call resolveReceiver could
+ * NOT resolve — see the `continue` right after the primary branch below —
+ * so a single call never produces two hits for the same kind.
+ */
+function iapConfigureAndPurchaseHits(path: string, file: ParsedFile): AnchorHit[] {
+  const hits: AnchorHit[] = [];
+  const importsIapPackage = IAP_PACKAGES.some((specifier) => fileImportsSpecifier(file, specifier));
+
+  for (const call of file.calls) {
+    const resolved = resolveReceiver(file, call);
+
+    if (resolved && IAP_PACKAGES.includes(resolved.specifier)) {
+      const last = resolved.chain[resolved.chain.length - 1];
+      if (last === "configure") {
+        hits.push({
+          kind: "iap-configure",
+          path,
+          enclosingFunction: call.enclosingFunction,
+          line: call.line,
+          reason: `${resolved.specifier}.configure(...) (receiver resolved to import "${resolved.specifier}")`,
+        });
+      }
+      if (IAP_PURCHASE_LAST_SEGMENTS.has(last)) {
+        hits.push({
+          kind: "iap-purchase",
+          path,
+          enclosingFunction: call.enclosingFunction,
+          line: call.line,
+          reason: `${resolved.specifier}.${last}(...) (receiver resolved to import "${resolved.specifier}")`,
+        });
+      }
+      continue; // receiver already resolved to an IAP package; never also test the weaker raw-chain fallback for this call
+    }
+
+    if (!importsIapPackage) continue;
+
+    if (matchesChainSuffix(call.chain, ["Purchases", "configure"])) {
+      hits.push({
+        kind: "iap-configure",
+        path,
+        enclosingFunction: call.enclosingFunction,
+        line: call.line,
+        reason: 'raw chain "Purchases.configure(...)" (weaker: file-level fallback, no receiver resolved; file imports an IAP package)',
+      });
+    }
+    const rawLast = call.chain[call.chain.length - 1];
+    if (IAP_PURCHASE_LAST_SEGMENTS.has(rawLast)) {
+      hits.push({
+        kind: "iap-purchase",
+        path,
+        enclosingFunction: call.enclosingFunction,
+        line: call.line,
+        reason: `raw call ending ".${rawLast}(...)" (weaker: file-level fallback, no receiver resolved; file imports an IAP package)`,
+      });
+    }
+  }
+
+  return hits;
+}
+
+const ENTITLEMENT_SEGMENT = "entitlements";
+
+/**
+ * Entitlement-gate hits: any CALL whose chain contains an "entitlements"
+ * segment anywhere (not just first/last — allows shapes like
+ * `customerInfo.entitlements.active.hasOwnProperty('pro')`, chain
+ * ["customerInfo","entitlements","active","hasOwnProperty"], or a computed
+ * access folded to "*" by chainOf, e.g.
+ * `customerInfo.entitlements.active['pro'].someMethod()`). Deliberately
+ * conservative and CALL-ONLY, per the milestone's own instruction — a
+ * documented, accepted gap: the single most common real-world shape,
+ * `if (customerInfo.entitlements.active['pro']) { ... }`, is a bare
+ * property/element-access expression, not a CallExpression, so it produces
+ * no ParsedCall at all and this rule can't see it; assigning it to a
+ * const first (`const entitlement = customerInfo.entitlements.active['pro']`)
+ * DOES get captured by parser-adapter.ts as a ParsedBinding (kind
+ * "alias"), but ParsedBinding carries no line/enclosingFunction (see its
+ * own interface in parser-adapter.ts, which this milestone's task
+ * explicitly keeps off-limits) — there is no AnchorHit this rule could
+ * honestly construct from a binding alone. Both gaps are accepted spike
+ * scope, not bugs: see anchors.test.ts's near-miss case for the bare-if
+ * shape.
+ */
+function iapEntitlementGateHits(path: string, file: ParsedFile): AnchorHit[] {
+  const hits: AnchorHit[] = [];
+  for (const call of file.calls) {
+    if (!call.chain.includes(ENTITLEMENT_SEGMENT)) continue;
+    hits.push({
+      kind: "iap-entitlement-gate",
+      path,
+      enclosingFunction: call.enclosingFunction,
+      line: call.line,
+      reason: `call chain contains an "${ENTITLEMENT_SEGMENT}" segment (chain: ${call.chain.join(".")}) — conservative, call-only signal; see iapEntitlementGateHits' own comment on this rule's known gaps`,
+    });
+  }
+  return hits;
+}
+
+// -----------------------------------------------------------------------
 // findAnchors
 // -----------------------------------------------------------------------
 
@@ -446,6 +758,8 @@ export function findAnchors(graph: ProofGraph): AnchorHit[] {
     if (!file) continue; // defensive; every path from graph.files() has a parsedFile by construction
 
     hits.push(...webhookHits(graph, path, file));
+    hits.push(...iapConfigureAndPurchaseHits(path, file));
+    hits.push(...iapEntitlementGateHits(path, file));
 
     // Reads seen so far in each enclosing-function scope of THIS file, in
     // source-position order. file.calls is already sorted by source

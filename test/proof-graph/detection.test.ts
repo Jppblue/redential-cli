@@ -20,8 +20,29 @@ import {
   USER,
   fixtureCommentsOnly,
   fixtureDirectPattern,
+  fixtureIapDirect,
+  fixtureIapLayered,
+  fixtureIapOtherAuthor,
+  fixtureIapUnused,
   fixtureLayeredPattern,
+  fixtureLemonSqueezyLayered,
+  fixtureLemonSqueezyManualHmacDirect,
+  fixtureLemonSqueezyOtherAuthor,
+  fixtureLemonSqueezyUnused,
+  fixtureMercadoPagoDirectNoIdempotency,
+  fixtureMercadoPagoDirectWithUpsert,
+  fixtureMercadoPagoLayered,
+  fixtureMercadoPagoOtherAuthor,
+  fixtureMercadoPagoUnused,
   fixtureOtherAuthor,
+  fixturePaddleLayered,
+  fixturePaddleDirect,
+  fixturePaddleOtherAuthor,
+  fixturePaddleUnused,
+  fixturePaypalDirect,
+  fixturePaypalLayered,
+  fixturePaypalOtherAuthor,
+  fixturePaypalUnused,
   fixtureStripeUnused,
 } from "./fixtures.js";
 
@@ -139,5 +160,379 @@ describe("proof-graph H3 end-to-end fixtures (docs/proof-graph-spike.md)", () =>
 
     expect(anchors).toEqual([]);
     expect(findings).toEqual([]);
+  });
+});
+
+// -----------------------------------------------------------------------
+// H6 phase 2b: end-to-end fixtures + detection tests for the 5 new patterns
+// anchors.ts/infer.ts's H6 phase 2a work added (see GOALS-proof-graph-spike
+// .md's H6 task). Same runPipeline helper, same fixture-shape conventions as
+// the Stripe describe block above.
+// -----------------------------------------------------------------------
+
+describe("proof-graph H6 phase 2b — PayPal (payments/paypal-webhook-flow)", () => {
+  const SLUG = "payments/paypal-webhook-flow";
+
+  it("one file, verifyWebhookSignature + Prisma upsert in the same function -> DIRECT (same-function), attributed, claimed", async () => {
+    const dir = fixturePaypalDirect();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(true);
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+  });
+
+  it("three files connected only by relative imports (handler -> service -> repo) -> INFERRED, claimed, edgeDistance <= 3", async () => {
+    const dir = fixturePaypalLayered();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("inferred");
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).not.toBeNull();
+    expect(finding.connection!.kind).toBe("cross-file");
+    expect(finding.connection!.edgeDistance).toBeGreaterThan(0);
+    expect(finding.connection!.edgeDistance).toBeLessThanOrEqual(3);
+  });
+
+  it("paypal imported but structurally unused -> ambiguous, NOT claimed", async () => {
+    const dir = fixturePaypalUnused();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    const finding = findings.find((f) => f.slug === SLUG);
+    expect(finding).toBeDefined();
+    expect(finding!.confidence).toBe("ambiguous");
+    expect(finding!.claimed).toBe(false);
+    // H6 phase 2a ownAnchors fix: an unrelated, fully connected Stripe
+    // pattern is present in the SAME repo (see fixturePaypalUnused's own
+    // comment) — its webhook-verification anchor must never leak into this
+    // PayPal finding's anchors.
+    expect(finding!.anchors.every((a) => a.kind !== "webhook-verification")).toBe(true);
+
+    // The Stripe pattern in the same repo is expected to still classify on
+    // its own, independent finding.
+    const stripeFinding = findings.find((f) => f.slug === "payments/payment-webhook-flow");
+    expect(stripeFinding).toBeDefined();
+    expect(stripeFinding!.confidence).toBe("direct");
+  });
+
+  it("pattern committed by a different author -> DIRECT overall, but unattributed and unclaimed for the selected user", async () => {
+    const dir = fixturePaypalOtherAuthor();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(false);
+    expect(finding.claimed).toBe(false);
+  });
+});
+
+describe("proof-graph H6 phase 2b — Mercado Pago (payments/mercadopago-flow)", () => {
+  const SLUG = "payments/mercadopago-flow";
+
+  it("creation call + Prisma write co-located, but NO idempotency-guard anywhere -> optionalAnchorKinds cap: confidence 'inferred' even though same-function", async () => {
+    const dir = fixtureMercadoPagoDirectNoIdempotency();
+    dirs.push(dir);
+
+    const { anchors, findings } = await runPipeline(dir, USER.email);
+
+    expect(anchors.some((a) => a.kind === "idempotency-guard")).toBe(false);
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    // The documented cap (infer.ts's StructuralPattern.optionalAnchorKinds):
+    // the pair search found a same-function connection (which for a normal
+    // 3-kind pattern would be DIRECT), but confidence is capped at
+    // "inferred" because idempotency-guard is globally absent.
+    expect(finding.confidence).toBe("inferred");
+    expect(finding.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+    expect(finding.attributed).toBe(true);
+    expect(finding.claimed).toBe(true);
+  });
+
+  it("same shape, but the write is an upsert -> idempotency-guard present again -> cap LIFTS: DIRECT (same-function)", async () => {
+    const dir = fixtureMercadoPagoDirectWithUpsert();
+    dirs.push(dir);
+
+    const { anchors, findings } = await runPipeline(dir, USER.email);
+
+    expect(anchors.some((a) => a.kind === "idempotency-guard")).toBe(true);
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+    expect(finding.attributed).toBe(true);
+    expect(finding.claimed).toBe(true);
+  });
+
+  it("three files connected only by relative imports (handler -> service -> repo) -> INFERRED, claimed, edgeDistance <= 3", async () => {
+    const dir = fixtureMercadoPagoLayered();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("inferred");
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).not.toBeNull();
+    expect(finding.connection!.kind).toBe("cross-file");
+    expect(finding.connection!.edgeDistance).toBeGreaterThan(0);
+    expect(finding.connection!.edgeDistance).toBeLessThanOrEqual(3);
+  });
+
+  it("mercadopago imported but structurally unused -> ambiguous, NOT claimed", async () => {
+    const dir = fixtureMercadoPagoUnused();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    const finding = findings.find((f) => f.slug === SLUG);
+    expect(finding).toBeDefined();
+    expect(finding!.confidence).toBe("ambiguous");
+    expect(finding!.claimed).toBe(false);
+    expect(finding!.anchors.every((a) => a.kind !== "webhook-verification")).toBe(true);
+
+    const stripeFinding = findings.find((f) => f.slug === "payments/payment-webhook-flow");
+    expect(stripeFinding).toBeDefined();
+    expect(stripeFinding!.confidence).toBe("direct");
+  });
+
+  it("pattern committed by a different author -> DIRECT overall, but unattributed and unclaimed for the selected user", async () => {
+    const dir = fixtureMercadoPagoOtherAuthor();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(false);
+    expect(finding.claimed).toBe(false);
+  });
+});
+
+describe("proof-graph H6 phase 2b — Lemon Squeezy (payments/lemonsqueezy-webhook-flow)", () => {
+  const SLUG = "payments/lemonsqueezy-webhook-flow";
+
+  it("one file, manual-HMAC verification (createHmac+timingSafeEqual, no package import) + Prisma upsert in the same function -> DIRECT (same-function), attributed, claimed", async () => {
+    const dir = fixtureLemonSqueezyManualHmacDirect();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(true);
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+  });
+
+  it("three files connected only by relative imports (handler -> service -> repo) -> INFERRED, claimed, edgeDistance <= 3", async () => {
+    const dir = fixtureLemonSqueezyLayered();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("inferred");
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).not.toBeNull();
+    expect(finding.connection!.kind).toBe("cross-file");
+    expect(finding.connection!.edgeDistance).toBeGreaterThan(0);
+    expect(finding.connection!.edgeDistance).toBeLessThanOrEqual(3);
+  });
+
+  it("lemon squeezy imported but structurally unused -> ambiguous, NOT claimed", async () => {
+    const dir = fixtureLemonSqueezyUnused();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    const finding = findings.find((f) => f.slug === SLUG);
+    expect(finding).toBeDefined();
+    expect(finding!.confidence).toBe("ambiguous");
+    expect(finding!.claimed).toBe(false);
+    expect(finding!.anchors.every((a) => a.kind !== "webhook-verification")).toBe(true);
+
+    const stripeFinding = findings.find((f) => f.slug === "payments/payment-webhook-flow");
+    expect(stripeFinding).toBeDefined();
+    expect(stripeFinding!.confidence).toBe("direct");
+  });
+
+  it("pattern committed by a different author -> DIRECT overall, but unattributed and unclaimed for the selected user", async () => {
+    const dir = fixtureLemonSqueezyOtherAuthor();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(false);
+    expect(finding.claimed).toBe(false);
+  });
+});
+
+describe("proof-graph H6 phase 2b — Paddle (payments/paddle-webhook-flow)", () => {
+  const SLUG = "payments/paddle-webhook-flow";
+
+  it("one file, webhooks.unmarshal + Prisma upsert in the same function -> DIRECT (same-function), attributed, claimed", async () => {
+    const dir = fixturePaddleDirect();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(true);
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+  });
+
+  it("three files connected only by relative imports (handler -> service -> repo) -> INFERRED, claimed, edgeDistance <= 3", async () => {
+    const dir = fixturePaddleLayered();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("inferred");
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).not.toBeNull();
+    expect(finding.connection!.kind).toBe("cross-file");
+    expect(finding.connection!.edgeDistance).toBeGreaterThan(0);
+    expect(finding.connection!.edgeDistance).toBeLessThanOrEqual(3);
+  });
+
+  it("paddle imported but structurally unused -> ambiguous, NOT claimed", async () => {
+    const dir = fixturePaddleUnused();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    const finding = findings.find((f) => f.slug === SLUG);
+    expect(finding).toBeDefined();
+    expect(finding!.confidence).toBe("ambiguous");
+    expect(finding!.claimed).toBe(false);
+    expect(finding!.anchors.every((a) => a.kind !== "webhook-verification")).toBe(true);
+
+    const stripeFinding = findings.find((f) => f.slug === "payments/payment-webhook-flow");
+    expect(stripeFinding).toBeDefined();
+    expect(stripeFinding!.confidence).toBe("direct");
+  });
+
+  it("pattern committed by a different author -> DIRECT overall, but unattributed and unclaimed for the selected user", async () => {
+    const dir = fixturePaddleOtherAuthor();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(false);
+    expect(finding.claimed).toBe(false);
+  });
+});
+
+describe("proof-graph H6 phase 2b — RevenueCat/IAP (payments/iap-subscription-flow)", () => {
+  const SLUG = "payments/iap-subscription-flow";
+
+  it("one file, configure + purchasePackage + a CALL-shaped entitlement gate in the same function -> DIRECT (same-function), attributed, claimed", async () => {
+    const dir = fixtureIapDirect();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(true);
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+  });
+
+  it("three files connected only by relative imports (setup -> purchase -> gate) -> INFERRED, claimed, edgeDistance <= 3", async () => {
+    const dir = fixtureIapLayered();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("inferred");
+    expect(finding.claimed).toBe(true);
+    expect(finding.connection).not.toBeNull();
+    expect(finding.connection!.kind).toBe("cross-file");
+    expect(finding.connection!.edgeDistance).toBeGreaterThan(0);
+    expect(finding.connection!.edgeDistance).toBeLessThanOrEqual(3);
+  });
+
+  it("react-native-purchases imported but structurally unused -> ambiguous, NOT claimed", async () => {
+    const dir = fixtureIapUnused();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    const finding = findings.find((f) => f.slug === SLUG);
+    expect(finding).toBeDefined();
+    expect(finding!.confidence).toBe("ambiguous");
+    expect(finding!.claimed).toBe(false);
+    // "iap-flow"'s own anchorKinds (iap-configure/iap-purchase/
+    // iap-entitlement-gate) never overlap with Stripe's own kinds
+    // (webhook-verification/db-write/idempotency-guard) at all — so, unlike
+    // the webhook-flow patterns above (which legitimately share db-write/
+    // idempotency-guard), this finding's anchors must be empty.
+    expect(finding!.anchors).toEqual([]);
+
+    const stripeFinding = findings.find((f) => f.slug === "payments/payment-webhook-flow");
+    expect(stripeFinding).toBeDefined();
+    expect(stripeFinding!.confidence).toBe("direct");
+  });
+
+  it("pattern committed by a different author -> DIRECT overall, but unattributed and unclaimed for the selected user", async () => {
+    const dir = fixtureIapOtherAuthor();
+    dirs.push(dir);
+
+    const { findings } = await runPipeline(dir, USER.email);
+
+    expect(findings).toHaveLength(1);
+    const finding = findings[0];
+    expect(finding.slug).toBe(SLUG);
+    expect(finding.confidence).toBe("direct");
+    expect(finding.attributed).toBe(false);
+    expect(finding.claimed).toBe(false);
   });
 });

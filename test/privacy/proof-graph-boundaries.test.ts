@@ -22,9 +22,25 @@ import { mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { cleanup } from "../support/fixtures.js";
-import { fixtureDirectPattern, USER } from "../proof-graph/fixtures.js";
+import { fixtureDirectPattern, fixturePaypalDirect, USER } from "../proof-graph/fixtures.js";
 import { runScan } from "../../src/scan.js";
 import type { Bundle } from "../../src/types.js";
+
+// H6 phase 2c — the 6 structural slugs STRUCTURAL_PATTERNS (infer.ts) can
+// ever produce, kept as a plain literal list here (not imported from
+// infer.ts) so this privacy test's own negative assertions stay independent
+// of the production module it's checking — importing STRUCTURAL_PATTERNS
+// itself would make a future accidental drop of an entry from that table
+// silently narrow what this test even checks, defeating the point of a
+// fixed, hand-verified list.
+const ALL_STRUCTURAL_SLUGS = [
+  "payments/payment-webhook-flow",
+  "payments/paypal-webhook-flow",
+  "payments/mercadopago-flow",
+  "payments/lemonsqueezy-webhook-flow",
+  "payments/paddle-webhook-flow",
+  "payments/iap-subscription-flow",
+];
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -80,6 +96,23 @@ let fixtureFiles: string[];
 let fixtureBasenames: string[];
 let fixtureFunctionNames: string[];
 
+// H6 phase 2c — ADDITIVE second fixture/bundle, ONE extra scan run (runtime
+// budget: this milestone's task caps it at that), so the "structural slug
+// never enters the bundle" assertion is non-vacuous for the 5 NEW (H6)
+// structural patterns too, not just the original Stripe one: fixtureDirectPattern
+// above only ever contains the Stripe pattern, so a negative assertion
+// against IT alone would trivially pass for the other 5 slugs even if the
+// boundary were broken for one of them (nothing in that fixture could ever
+// have produced them in the first place). fixturePaypalDirect contains a
+// full, connected, non-Stripe structural pattern (PayPal's own
+// webhook-verification -> db-write -> idempotency-guard shape — see
+// test/proof-graph/fixtures.ts's own comment on that builder), giving this
+// second scan real graph-shaped content to leak for the new tier, the same
+// "positive control proves the scan actually looked" rationale the original
+// bundle/Stripe pair already uses.
+let paypalBundle: Bundle;
+let paypalBundleJson: string;
+
 beforeAll(async () => {
   const dir = fixtureDirectPattern();
   dirs.push(dir);
@@ -110,6 +143,19 @@ beforeAll(async () => {
     configDir,
   });
   bundleJson = JSON.stringify(bundle);
+
+  // The one extra scan run — see this variable's own comment above.
+  const paypalDir = fixturePaypalDirect();
+  dirs.push(paypalDir);
+  const paypalConfigDir = tempConfigDir();
+  paypalBundle = await runScan({
+    repoPath: paypalDir,
+    authors: [USER.email],
+    confirmed: true,
+    toolVersion: "0.1.0",
+    configDir: paypalConfigDir,
+  });
+  paypalBundleJson = JSON.stringify(paypalBundle);
 });
 
 describe("proof-graph privacy boundary (H3, docs/proof-graph-spike.md's Invariants)", () => {
@@ -171,6 +217,23 @@ describe("proof-graph privacy boundary (H3, docs/proof-graph-spike.md's Invarian
   it("the structural slug never enters the bundle; the plain import-tier slug (positive control) does", () => {
     expect(bundleJson).not.toContain("payments/payment-webhook-flow");
     expect(bundle.detected_skills.map((s) => s.slug)).toContain("payments/stripe");
+  });
+
+  // H6 phase 2c — extends the assertion above from ONE structural slug to
+  // ALL SIX (the original payments/payment-webhook-flow plus the 5 H6
+  // additions: PayPal, Mercado Pago, Lemon Squeezy, Paddle, IAP), over BOTH
+  // scanned bundles. The Stripe-only bundle keeps its existing positive
+  // control (payments/stripe); the PayPal bundle gets its own positive
+  // control (payments/paypal, Tier 1 import matching) so the negative
+  // assertion is non-vacuous for the new tier too, not just inherited from
+  // the original Stripe-only fixture that could never have produced any of
+  // the other 5 slugs in the first place.
+  it("none of the 6 structural slugs ever enter either scanned bundle, across both fixtures", () => {
+    for (const slug of ALL_STRUCTURAL_SLUGS) {
+      expect(bundleJson, `Stripe-fixture bundle must not contain structural slug "${slug}"`).not.toContain(slug);
+      expect(paypalBundleJson, `PayPal-fixture bundle must not contain structural slug "${slug}"`).not.toContain(slug);
+    }
+    expect(paypalBundle.detected_skills.map((s) => s.slug)).toContain("payments/paypal");
   });
 
   // Principle: the boundary is structural, not incidental — the modules

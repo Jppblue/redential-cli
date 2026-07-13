@@ -225,3 +225,886 @@ export function fixtureCommentsOnly(): string {
   });
   return dir;
 }
+
+// -----------------------------------------------------------------------
+// H6 phase 2b — end-to-end fixtures for the 5 new patterns anchors.ts/
+// infer.ts's H6 phase 2a work added: PayPal, Mercado Pago, Lemon Squeezy,
+// Paddle (all "webhook-flow" pattern kind, same shape family as the Stripe
+// fixtures above) and RevenueCat/IAP (its own "iap-flow" shape). Same
+// posture/reuse rationale as every builder above: tiny tmpdir git repos,
+// USER/OTHER identities, one or two commits, 1-3 files per repo.
+//
+// A shared "Stripe noise" file (stripeNoiseFileContent below) is added to
+// each new provider's "imported but structurally unused" fixture — see that
+// helper's own comment for why: it's what actually exercises the H6 phase 2a
+// ownAnchors fix (a *different* provider's own webhook-verification anchor
+// present in the SAME repo must never leak into this provider's AMBIGUOUS
+// finding), not just a restatement of fixtureStripeUnused's simpler "nothing
+// else in the repo at all" case.
+// -----------------------------------------------------------------------
+
+/**
+ * The exact same connected pattern as fixtureDirectPattern's src/webhook.ts,
+ * committed under a different path/function name so it can be added
+ * alongside another provider's own file in the SAME repo/commit as
+ * cross-provider "noise" — see the "imported but structurally unused"
+ * fixtures below for each of the 5 new patterns, all of which use this to
+ * prove a *different* provider's webhook-verification anchor doesn't leak
+ * into the unused provider's AMBIGUOUS finding (the H6 phase 2a ownAnchors
+ * fix).
+ */
+function stripeNoiseFileContent(): string {
+  return [
+    'import Stripe from "stripe";',
+    'import { PrismaClient } from "@prisma/client";',
+    "",
+    `const stripe = new Stripe("${FAKE_STRIPE_SECRET}");`,
+    "const prisma = new PrismaClient();",
+    "",
+    "export async function handleStripeNoiseWebhook(req, res) {",
+    '  const event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], secret);',
+    "  const existing = await prisma.payment.findUnique({ where: { id: event.id } });",
+    '  if (existing) return res.status(200).send("already processed");',
+    "  await prisma.payment.create({ data: { id: event.id } });",
+    '  res.status(200).send("ok");',
+    "}",
+    "",
+  ].join("\n");
+}
+
+// -----------------------------------------------------------------------
+// PayPal (payments/paypal-webhook-flow)
+// -----------------------------------------------------------------------
+
+/**
+ * ONE file, USER-committed: paypalClient.verifyWebhookSignature(...) (root
+ * resolved directly to the "@paypal/checkout-server-sdk" import, per
+ * WEBHOOK_PROVIDERS' paypal descriptor) -> Prisma upsert (both the db-write
+ * AND, by construction, the idempotency-guard anchor), all inside one
+ * function -> DIRECT (same-function).
+ */
+export function fixturePaypalDirect(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add paypal webhook handler",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/webhook.ts": [
+        'import paypalClient from "@paypal/checkout-server-sdk";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handlePaypalWebhook(req, res) {",
+        "  const verification = await paypalClient.verifyWebhookSignature({",
+        '    transmissionId: req.headers["paypal-transmission-id"],',
+        "    webhookEvent: req.body,",
+        "  });",
+        "  await prisma.payment.upsert({",
+        "    where: { id: verification.id },",
+        "    create: { id: verification.id },",
+        "    update: {},",
+        "  });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * THREE files connected only by relative imports: src/handler.ts (PayPal
+ * verify call) -> src/service.ts -> src/repo.ts (Prisma upsert). Same 2-hop
+ * shape as fixtureLayeredPattern -> INFERRED.
+ */
+export function fixturePaypalLayered(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add layered paypal webhook handler (handler -> service -> repo)",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/handler.ts": [
+        'import paypalClient from "@paypal/checkout-server-sdk";',
+        'import { persistEvent } from "./service.js";',
+        "",
+        "export async function handlePaypalWebhook(req) {",
+        "  const verification = await paypalClient.verifyWebhookSignature({",
+        '    transmissionId: req.headers["paypal-transmission-id"],',
+        "    webhookEvent: req.body,",
+        "  });",
+        "  await persistEvent(verification);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/service.ts": [
+        'import { upsertPayment } from "./repo.js";',
+        "",
+        "export async function persistEvent(verification) {",
+        "  await upsertPayment(verification);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/repo.ts": [
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function upsertPayment(verification) {",
+        "  await prisma.payment.upsert({ where: { id: verification.id }, create: { id: verification.id }, update: {} });",
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * USER commits a file that ONLY imports "@paypal/checkout-server-sdk" — no
+ * verifyWebhookSignature call anywhere — alongside an UNRELATED, fully
+ * connected Stripe pattern (stripeNoiseFileContent) in the same commit. The
+ * PayPal pattern classifies AMBIGUOUS (package imported, never wired in);
+ * the Stripe pattern classifies DIRECT. Proves the H6 phase 2a ownAnchors
+ * fix: the PayPal AMBIGUOUS finding's anchors must never include Stripe's
+ * own webhook-verification anchor, even though both are present in the same
+ * repo (see detection.test.ts's assertion on this fixture).
+ */
+export function fixturePaypalUnused(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add unused paypal client alongside an unrelated stripe handler",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/paypal-client.ts": ['import paypalClient from "@paypal/checkout-server-sdk";', "", "export const client = paypalClient;", ""].join(
+        "\n"
+      ),
+      "src/stripe-webhook.ts": stripeNoiseFileContent(),
+    },
+  });
+  return dir;
+}
+
+/**
+ * The exact same connected PayPal pattern as fixturePaypalDirect's
+ * src/webhook.ts, but committed by OTHER — not USER. USER separately commits
+ * only an unrelated file. Classifies DIRECT overall, but unattributed and
+ * unclaimed for USER — same shape as fixtureOtherAuthor.
+ */
+export function fixturePaypalOtherAuthor(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add paypal webhook handler",
+    authorName: OTHER.name,
+    authorEmail: OTHER.email,
+    files: {
+      "src/webhook.ts": [
+        'import paypalClient from "@paypal/checkout-server-sdk";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handlePaypalWebhook(req, res) {",
+        "  const verification = await paypalClient.verifyWebhookSignature({",
+        '    transmissionId: req.headers["paypal-transmission-id"],',
+        "    webhookEvent: req.body,",
+        "  });",
+        "  await prisma.payment.upsert({",
+        "    where: { id: verification.id },",
+        "    create: { id: verification.id },",
+        "    update: {},",
+        "  });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  commit(dir, {
+    message: "add unrelated util",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/util.ts": ["export function noop() {", "  return null;", "}", ""].join("\n"),
+    },
+  });
+  return dir;
+}
+
+// -----------------------------------------------------------------------
+// Mercado Pago (payments/mercadopago-flow) — the one pattern with an
+// optionalAnchorKinds cap on idempotency-guard (see infer.ts's
+// STRUCTURAL_PATTERNS entry and its own comment). Needs 5 fixtures, not 4:
+// the cap case, the cap-LIFTED case (an upsert makes idempotency-guard
+// present again), plus the usual layered/unused/other-author trio.
+// -----------------------------------------------------------------------
+
+/**
+ * ONE file, USER-committed: `new Preference(client).create(...)` (resolved
+ * to Mercado Pago's `creationChainSuffixes` rule) co-located, in the SAME
+ * function, with a plain (non-upsert) Prisma `.create(...)` write — no
+ * idempotency signal anywhere in the repo (no upsert, no explicit
+ * idempotencyKey, no prior DB read in this function). Despite being
+ * same-function co-located, infer.ts's optionalAnchorKinds cap means this
+ * classifies "inferred", NOT "direct" — see
+ * StructuralPattern.optionalAnchorKinds' own comment in infer.ts.
+ */
+export function fixtureMercadoPagoDirectNoIdempotency(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add mercadopago webhook handler (no idempotency guard anywhere)",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/webhook.ts": [
+        'import { MercadoPagoConfig, Preference } from "mercadopago";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        'const client = new MercadoPagoConfig({ accessToken: "xxx-EXAMPLE-xxx" });',
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handleMercadoPagoWebhook(req, res) {",
+        "  const preference = new Preference(client);",
+        "  const result = await preference.create({ body: { items: req.body.items } });",
+        "  await prisma.payment.create({ data: { id: result.id } });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * Same shape as fixtureMercadoPagoDirectNoIdempotency, but the Prisma write
+ * is an upsert — idempotent by construction (see anchors.ts's rule 1), which
+ * makes idempotency-guard globally present again. Proves the cap LIFTS: this
+ * classifies "direct" (same-function), not "inferred".
+ */
+export function fixtureMercadoPagoDirectWithUpsert(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add mercadopago webhook handler (upsert lifts the idempotency cap)",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/webhook.ts": [
+        'import { MercadoPagoConfig, Preference } from "mercadopago";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        'const client = new MercadoPagoConfig({ accessToken: "xxx-EXAMPLE-xxx" });',
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handleMercadoPagoWebhook(req, res) {",
+        "  const preference = new Preference(client);",
+        "  const result = await preference.create({ body: { items: req.body.items } });",
+        "  await prisma.payment.upsert({ where: { id: result.id }, create: { id: result.id }, update: {} });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * THREE files connected only by relative imports: src/handler.ts (creation
+ * call) -> src/service.ts -> src/repo.ts (Prisma upsert — both the db-write
+ * and idempotency-guard anchor, so the optional-kind cap never engages
+ * here). Same 2-hop shape as fixtureLayeredPattern -> INFERRED.
+ */
+export function fixtureMercadoPagoLayered(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add layered mercadopago webhook handler (handler -> service -> repo)",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/handler.ts": [
+        'import { MercadoPagoConfig, Preference } from "mercadopago";',
+        'import { persistPreference } from "./service.js";',
+        "",
+        'const client = new MercadoPagoConfig({ accessToken: "xxx-EXAMPLE-xxx" });',
+        "",
+        "export async function handleMercadoPagoWebhook(req) {",
+        "  const preference = new Preference(client);",
+        "  const result = await preference.create({ body: { items: req.body.items } });",
+        "  await persistPreference(result);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/service.ts": [
+        'import { upsertPreference } from "./repo.js";',
+        "",
+        "export async function persistPreference(result) {",
+        "  await upsertPreference(result);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/repo.ts": [
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function upsertPreference(result) {",
+        "  await prisma.payment.upsert({ where: { id: result.id }, create: { id: result.id }, update: {} });",
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * USER commits a file that ONLY imports "mercadopago" (constructs the
+ * config client, never calls `.create(...)` on a Preference/Payment) —
+ * alongside an unrelated, fully connected Stripe pattern in the same commit.
+ * Same "prove the ownAnchors fix" shape as fixturePaypalUnused.
+ */
+export function fixtureMercadoPagoUnused(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add unused mercadopago client alongside an unrelated stripe handler",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/mercadopago-client.ts": [
+        'import { MercadoPagoConfig } from "mercadopago";',
+        "",
+        'export const client = new MercadoPagoConfig({ accessToken: "xxx-EXAMPLE-xxx" });',
+        "",
+      ].join("\n"),
+      "src/stripe-webhook.ts": stripeNoiseFileContent(),
+    },
+  });
+  return dir;
+}
+
+/**
+ * The exact same connected Mercado Pago pattern (upsert variant, so the
+ * optional-kind cap doesn't complicate this attribution-only case) as
+ * fixtureMercadoPagoDirectWithUpsert's src/webhook.ts, but committed by
+ * OTHER — not USER. Classifies DIRECT overall, but unattributed and
+ * unclaimed for USER.
+ */
+export function fixtureMercadoPagoOtherAuthor(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add mercadopago webhook handler",
+    authorName: OTHER.name,
+    authorEmail: OTHER.email,
+    files: {
+      "src/webhook.ts": [
+        'import { MercadoPagoConfig, Preference } from "mercadopago";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        'const client = new MercadoPagoConfig({ accessToken: "xxx-EXAMPLE-xxx" });',
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handleMercadoPagoWebhook(req, res) {",
+        "  const preference = new Preference(client);",
+        "  const result = await preference.create({ body: { items: req.body.items } });",
+        "  await prisma.payment.upsert({ where: { id: result.id }, create: { id: result.id }, update: {} });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  commit(dir, {
+    message: "add unrelated util",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/util.ts": ["export function noop() {", "  return null;", "}", ""].join("\n"),
+    },
+  });
+  return dir;
+}
+
+// -----------------------------------------------------------------------
+// Lemon Squeezy (payments/lemonsqueezy-webhook-flow) — fixtureDirect below
+// deliberately uses the manual-HMAC shape (createHmac + timingSafeEqual +
+// the "x-signature" literal, NO package import at all), per
+// WebhookProviderDescriptor.manualHmacLiteral's own comment: it's the
+// distinctive rule this provider needs (Lemon Squeezy's SDK has no
+// dedicated verify-signature helper). The other 3 fixtures use the plain
+// package-import + literal file-level-fallback shape instead, which is
+// simpler to compose across multiple files/an "unused" case.
+// -----------------------------------------------------------------------
+
+/**
+ * ONE file, USER-committed: hand-rolled HMAC verification (createHmac +
+ * timingSafeEqual calls, co-located with the "x-signature" literal — no
+ * "@lemonsqueezy/lemonsqueezy.js" import anywhere, per the manual-HMAC
+ * special case) -> Prisma upsert, all inside one function -> DIRECT
+ * (same-function).
+ */
+export function fixtureLemonSqueezyManualHmacDirect(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add lemon squeezy webhook handler (manual HMAC verification)",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/webhook.ts": [
+        'import { createHmac, timingSafeEqual } from "node:crypto";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handleLemonSqueezyWebhook(req, res) {",
+        '  const digest = createHmac("sha256", "xxx-EXAMPLE-xxx").update(req.rawBody).digest("hex");',
+        '  const signature = req.headers["x-signature"];',
+        "  const valid = timingSafeEqual(Buffer.from(digest), Buffer.from(signature));",
+        '  if (!valid) return res.status(400).send("invalid signature");',
+        "  await prisma.payment.upsert({",
+        "    where: { id: req.body.data.id },",
+        "    create: { id: req.body.data.id },",
+        "    update: {},",
+        "  });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * THREE files connected only by relative imports: src/handler.ts (package
+ * import + "x-signature" literal — the weaker file-level fallback, not the
+ * manual-HMAC rule) -> src/service.ts -> src/repo.ts (Prisma upsert). Same
+ * 2-hop shape as fixtureLayeredPattern -> INFERRED.
+ */
+export function fixtureLemonSqueezyLayered(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add layered lemon squeezy webhook handler (handler -> service -> repo)",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/handler.ts": [
+        'import { lemonSqueezySetup } from "@lemonsqueezy/lemonsqueezy.js";',
+        'import { persistEvent } from "./service.js";',
+        "",
+        "export async function handleLemonSqueezyWebhook(req) {",
+        '  const signature = req.headers["x-signature"];',
+        "  await persistEvent(req.body, signature, lemonSqueezySetup);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/service.ts": [
+        'import { upsertPayment } from "./repo.js";',
+        "",
+        "export async function persistEvent(event, signature) {",
+        "  await upsertPayment(event, signature);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/repo.ts": [
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function upsertPayment(event) {",
+        "  await prisma.payment.upsert({ where: { id: event.id }, create: { id: event.id }, update: {} });",
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * USER commits a file that ONLY imports "@lemonsqueezy/lemonsqueezy.js" —
+ * no manual-HMAC shape, no signature literal anywhere — alongside an
+ * unrelated, fully connected Stripe pattern in the same commit. Same "prove
+ * the ownAnchors fix" shape as fixturePaypalUnused.
+ */
+export function fixtureLemonSqueezyUnused(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add unused lemon squeezy import alongside an unrelated stripe handler",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/lemonsqueezy-client.ts": [
+        'import { lemonSqueezySetup } from "@lemonsqueezy/lemonsqueezy.js";',
+        "",
+        "export const setup = lemonSqueezySetup;",
+        "",
+      ].join("\n"),
+      "src/stripe-webhook.ts": stripeNoiseFileContent(),
+    },
+  });
+  return dir;
+}
+
+/**
+ * The exact same connected Lemon Squeezy pattern (manual-HMAC variant) as
+ * fixtureLemonSqueezyManualHmacDirect's src/webhook.ts, but committed by
+ * OTHER — not USER. Classifies DIRECT overall, but unattributed and
+ * unclaimed for USER.
+ */
+export function fixtureLemonSqueezyOtherAuthor(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add lemon squeezy webhook handler (manual HMAC verification)",
+    authorName: OTHER.name,
+    authorEmail: OTHER.email,
+    files: {
+      "src/webhook.ts": [
+        'import { createHmac, timingSafeEqual } from "node:crypto";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handleLemonSqueezyWebhook(req, res) {",
+        '  const digest = createHmac("sha256", "xxx-EXAMPLE-xxx").update(req.rawBody).digest("hex");',
+        '  const signature = req.headers["x-signature"];',
+        "  const valid = timingSafeEqual(Buffer.from(digest), Buffer.from(signature));",
+        '  if (!valid) return res.status(400).send("invalid signature");',
+        "  await prisma.payment.upsert({",
+        "    where: { id: req.body.data.id },",
+        "    create: { id: req.body.data.id },",
+        "    update: {},",
+        "  });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  commit(dir, {
+    message: "add unrelated util",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/util.ts": ["export function noop() {", "  return null;", "}", ""].join("\n"),
+    },
+  });
+  return dir;
+}
+
+// -----------------------------------------------------------------------
+// Paddle (payments/paddle-webhook-flow)
+// -----------------------------------------------------------------------
+
+/**
+ * ONE file, USER-committed: `paddle.webhooks.unmarshal(...)` (root resolved
+ * through a same-file `new Paddle(...)` binding, per resolveReceiver's rule
+ * 2, to the "@paddle/paddle-node-sdk" import) -> Prisma upsert, all inside
+ * one function -> DIRECT (same-function).
+ */
+export function fixturePaddleDirect(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add paddle webhook handler",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/webhook.ts": [
+        'import { Paddle } from "@paddle/paddle-node-sdk";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        'const paddle = new Paddle("xxx-EXAMPLE-xxx");',
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handlePaddleWebhook(req, res) {",
+        '  const event = paddle.webhooks.unmarshal(req.rawBody, "xxx-EXAMPLE-xxx", req.headers["paddle-signature"]);',
+        "  await prisma.payment.upsert({",
+        "    where: { id: event.data.id },",
+        "    create: { id: event.data.id },",
+        "    update: {},",
+        "  });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * THREE files connected only by relative imports: src/handler.ts (Paddle
+ * unmarshal call) -> src/service.ts -> src/repo.ts (Prisma upsert). Same
+ * 2-hop shape as fixtureLayeredPattern -> INFERRED.
+ */
+export function fixturePaddleLayered(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add layered paddle webhook handler (handler -> service -> repo)",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/handler.ts": [
+        'import { Paddle } from "@paddle/paddle-node-sdk";',
+        'import { persistEvent } from "./service.js";',
+        "",
+        'const paddle = new Paddle("xxx-EXAMPLE-xxx");',
+        "",
+        "export async function handlePaddleWebhook(req) {",
+        '  const event = paddle.webhooks.unmarshal(req.rawBody, "xxx-EXAMPLE-xxx", req.headers["paddle-signature"]);',
+        "  await persistEvent(event);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/service.ts": [
+        'import { upsertPayment } from "./repo.js";',
+        "",
+        "export async function persistEvent(event) {",
+        "  await upsertPayment(event);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/repo.ts": [
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function upsertPayment(event) {",
+        "  await prisma.payment.upsert({ where: { id: event.data.id }, create: { id: event.data.id }, update: {} });",
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * USER commits a file that ONLY constructs a Paddle client (`new
+ * Paddle(...)`) — never followed by a `.webhooks.unmarshal(...)` call, the
+ * same documented "construction alone produces no hit" gap
+ * WebhookProviderDescriptor.creationChainSuffixes' own comment describes for
+ * Mercado Pago — alongside an unrelated, fully connected Stripe pattern in
+ * the same commit. Same "prove the ownAnchors fix" shape as
+ * fixturePaypalUnused.
+ */
+export function fixturePaddleUnused(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add unused paddle client alongside an unrelated stripe handler",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/paddle-client.ts": [
+        'import { Paddle } from "@paddle/paddle-node-sdk";',
+        "",
+        'export const paddle = new Paddle("xxx-EXAMPLE-xxx");',
+        "",
+      ].join("\n"),
+      "src/stripe-webhook.ts": stripeNoiseFileContent(),
+    },
+  });
+  return dir;
+}
+
+/**
+ * The exact same connected Paddle pattern as fixturePaddleDirect's
+ * src/webhook.ts, but committed by OTHER — not USER. Classifies DIRECT
+ * overall, but unattributed and unclaimed for USER.
+ */
+export function fixturePaddleOtherAuthor(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add paddle webhook handler",
+    authorName: OTHER.name,
+    authorEmail: OTHER.email,
+    files: {
+      "src/webhook.ts": [
+        'import { Paddle } from "@paddle/paddle-node-sdk";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        'const paddle = new Paddle("xxx-EXAMPLE-xxx");',
+        "const prisma = new PrismaClient();",
+        "",
+        "export async function handlePaddleWebhook(req, res) {",
+        '  const event = paddle.webhooks.unmarshal(req.rawBody, "xxx-EXAMPLE-xxx", req.headers["paddle-signature"]);',
+        "  await prisma.payment.upsert({",
+        "    where: { id: event.data.id },",
+        "    create: { id: event.data.id },",
+        "    update: {},",
+        "  });",
+        '  res.status(200).send("ok");',
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  commit(dir, {
+    message: "add unrelated util",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/util.ts": ["export function noop() {", "  return null;", "}", ""].join("\n"),
+    },
+  });
+  return dir;
+}
+
+// -----------------------------------------------------------------------
+// RevenueCat / IAP (payments/iap-subscription-flow) — its own 3-anchor
+// shape (configure / purchase / entitlement-gate), no webhook node at all.
+// The entitlement-gate check is deliberately CALL-ONLY (see
+// iapEntitlementGateHits' own comment in anchors.ts): the real-world
+// RevenueCat shape (`customerInfo.entitlements.active['pro']`) is a bare
+// property/element access, not a CallExpression, so the fixtures below use
+// a made-up CALL-shaped entitlement check instead — the documented,
+// accepted gap, not a fixture mistake.
+// -----------------------------------------------------------------------
+
+/**
+ * ONE file, USER-committed: Purchases.configure(...) -> Purchases
+ * .purchasePackage(...) -> a CALL-shaped entitlement gate, all inside one
+ * function -> DIRECT (same-function).
+ */
+export function fixtureIapDirect(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add in-app-purchase subscription flow",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/purchases.ts": [
+        'import Purchases from "react-native-purchases";',
+        "",
+        "export async function setupAndPurchase(offering) {",
+        '  Purchases.configure({ apiKey: "xxx-EXAMPLE-xxx" });',
+        "  const { customerInfo } = await Purchases.purchasePackage(offering.availablePackages[0]);",
+        "  // NOTE: the real-world RevenueCat shape here is a bare property/element",
+        "  // access (`customerInfo.entitlements.active['pro']`), which the anchor",
+        "  // recognizer can't see (not a CallExpression — see anchors.ts's",
+        "  // iapEntitlementGateHits' own documented gap). Using a CALL-shaped",
+        "  // entitlement check instead so this fixture actually exercises the rule.",
+        '  const isPro = customerInfo.entitlements.get("pro");',
+        '  if (!isPro) throw new Error("not entitled");',
+        "  return customerInfo;",
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * THREE files connected only by relative imports: src/setup.ts (configure)
+ * -> src/purchase.ts (purchasePackage) -> src/gate.ts (the CALL-shaped
+ * entitlement gate). Same 2-hop shape as fixtureLayeredPattern -> INFERRED.
+ */
+export function fixtureIapLayered(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add layered in-app-purchase flow (setup -> purchase -> gate)",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/setup.ts": [
+        'import Purchases from "react-native-purchases";',
+        'import { doPurchase } from "./purchase.js";',
+        "",
+        "export async function setupAndBuy(offering) {",
+        '  Purchases.configure({ apiKey: "xxx-EXAMPLE-xxx" });',
+        "  await doPurchase(offering);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/purchase.ts": [
+        'import Purchases from "react-native-purchases";',
+        'import { checkEntitlement } from "./gate.js";',
+        "",
+        "export async function doPurchase(offering) {",
+        "  const { customerInfo } = await Purchases.purchasePackage(offering.availablePackages[0]);",
+        "  await checkEntitlement(customerInfo);",
+        "}",
+        "",
+      ].join("\n"),
+      "src/gate.ts": [
+        "// See fixtureIapDirect's own comment: a CALL-shaped entitlement check,",
+        "// not the real-world bare property/element-access shape (documented gap).",
+        "export async function checkEntitlement(customerInfo) {",
+        '  const isPro = customerInfo.entitlements.get("pro");',
+        '  if (!isPro) throw new Error("not entitled");',
+        "  return isPro;",
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  return dir;
+}
+
+/**
+ * USER commits a file that ONLY imports "react-native-purchases" — no
+ * configure/purchase/entitlement call anywhere — alongside an unrelated,
+ * fully connected Stripe pattern in the same commit. Same "prove the
+ * ownAnchors fix" shape as fixturePaypalUnused (here, none of Stripe's
+ * webhook-verification/db-write/idempotency-guard anchors are even part of
+ * "iap-flow"'s own anchorKinds at all, so under the pre-fix behavior — which
+ * carried the WHOLE cross-pattern anchor pool — every one of them would have
+ * leaked into this finding).
+ */
+export function fixtureIapUnused(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add unused react-native-purchases import alongside an unrelated stripe handler",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/purchases-client.ts": ['import Purchases from "react-native-purchases";', "", "export const purchases = Purchases;", ""].join(
+        "\n"
+      ),
+      "src/stripe-webhook.ts": stripeNoiseFileContent(),
+    },
+  });
+  return dir;
+}
+
+/**
+ * The exact same connected IAP pattern as fixtureIapDirect's
+ * src/purchases.ts, but committed by OTHER — not USER. Classifies DIRECT
+ * overall, but unattributed and unclaimed for USER.
+ */
+export function fixtureIapOtherAuthor(): string {
+  const dir = createRepo();
+  commit(dir, {
+    message: "add in-app-purchase subscription flow",
+    authorName: OTHER.name,
+    authorEmail: OTHER.email,
+    files: {
+      "src/purchases.ts": [
+        'import Purchases from "react-native-purchases";',
+        "",
+        "export async function setupAndPurchase(offering) {",
+        '  Purchases.configure({ apiKey: "xxx-EXAMPLE-xxx" });',
+        "  const { customerInfo } = await Purchases.purchasePackage(offering.availablePackages[0]);",
+        '  const isPro = customerInfo.entitlements.get("pro");',
+        '  if (!isPro) throw new Error("not entitled");',
+        "  return customerInfo;",
+        "}",
+        "",
+      ].join("\n"),
+    },
+  });
+  commit(dir, {
+    message: "add unrelated util",
+    authorName: USER.name,
+    authorEmail: USER.email,
+    files: {
+      "src/util.ts": ["export function noop() {", "  return null;", "}", ""].join("\n"),
+    },
+  });
+  return dir;
+}

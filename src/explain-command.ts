@@ -40,8 +40,9 @@ import { findAnchors, type AnchorHit, type AnchorKind } from "./proof-graph/anch
 import {
   collectUserTouchedFiles,
   inferStructuralSkills,
-  STRUCTURAL_SKILL_SLUG,
+  STRUCTURAL_PATTERNS,
   type StructuralFinding,
+  type StructuralPattern,
 } from "./proof-graph/infer.js";
 import { createProgressReporter } from "./proof-graph/progress.js";
 import { getAllCommits, getConfiguredUserEmail, type RawCommit } from "./git.js";
@@ -101,10 +102,20 @@ const CLASSIFICATION_MEANING: Record<StructuralFinding["confidence"], string> = 
     "the pattern is NOT fully connected (or only partially present) — this is a tentative signal only, and the skill is NOT claimed.",
 };
 
-// Fixed, meaningful order for grouping anchors in the output — the order the
-// webhook -> DB write -> idempotency-guard flow actually happens in, not the
-// alphabetical/positional order StructuralFinding.anchors is sorted in.
-const ANCHOR_KIND_ORDER: AnchorKind[] = ["webhook-verification", "db-write", "idempotency-guard"];
+// H6 phase 2c: grouping order used to be a single hardcoded module-level
+// constant (webhook-verification -> db-write -> idempotency-guard), because
+// the spike only ever explained one pattern. Now that STRUCTURAL_PATTERNS
+// (infer.ts) has 6 entries with 2 different anchor-kind shapes (the 5
+// webhook-flow patterns' ["webhook-verification","db-write",
+// "idempotency-guard"] vs. iap-flow's own ["iap-configure","iap-purchase",
+// "iap-entitlement-gate"]), the grouping order is DATA-DRIVEN from the
+// matched StructuralPattern's own `anchorKinds` field directly (see that
+// field's own doc comment in infer.ts: it's already the fixed, meaningful,
+// "the order the flow actually happens in" order every recognizer/search
+// function is built around) rather than a second, parallel constant that
+// could drift out of sync with it. No standalone ANCHOR_KIND_ORDER constant
+// remains — every call site below takes the resolved `pattern` and reads
+// `pattern.anchorKinds` directly.
 
 function describeAnchor(hit: AnchorHit): string {
   return `    ${hit.path}:${hit.line} in ${hit.enclosingFunction ?? "<module top level>"} — ${hit.reason}`;
@@ -176,7 +187,7 @@ function shortestFilePath(adjacency: Map<string, Set<string>>, from: string, to:
  * single-file description for same-function/same-file (DIRECT). null
  * `connection` (AMBIGUOUS) is handled by the caller, not here.
  */
-function renderConnection(graph: ReturnType<typeof buildGraph>, finding: StructuralFinding): string {
+function renderConnection(graph: ReturnType<typeof buildGraph>, finding: StructuralFinding, pattern: StructuralPattern): string {
   const connection = finding.connection;
   if (!connection) return "none (pattern not fully connected — see the AMBIGUOUS explanation below)";
 
@@ -189,14 +200,16 @@ function renderConnection(graph: ReturnType<typeof buildGraph>, finding: Structu
   }
 
   // cross-file (INFERRED): reconstruct the actual chain from the graph's
-  // resolved import edges, rooted at the webhook-verification anchor's file
-  // when present (the flow's natural starting point) and reaching the
-  // farthest other anchor file — matching the finding's own edgeDistance
-  // (the MAX pairwise distance among the supporting anchors, see infer.ts's
-  // findInferredTriple).
+  // resolved import edges, rooted at the PATTERN'S OWN primary anchor's file
+  // when present (anchorKinds[0] — webhook-verification for every
+  // webhook-flow pattern, iap-configure for iap-flow; see
+  // StructuralPattern.anchorKinds' own "PRIMARY anchor by convention"
+  // comment in infer.ts) and reaching the farthest other anchor file —
+  // matching the finding's own edgeDistance (the MAX pairwise distance
+  // among the supporting anchors, see infer.ts's findInferredTriple).
   const adjacency = buildFileAdjacency(graph);
-  const webhookAnchor = finding.anchors.find((a) => a.kind === "webhook-verification");
-  const source = webhookAnchor?.path ?? distinctFiles[0];
+  const primaryAnchor = finding.anchors.find((a) => a.kind === pattern.anchorKinds[0]);
+  const source = primaryAnchor?.path ?? distinctFiles[0];
   const others = distinctFiles.filter((f) => f !== source);
 
   let farthest: { file: string; path: string[] } | null = null;
@@ -208,16 +221,65 @@ function renderConnection(graph: ReturnType<typeof buildGraph>, finding: Structu
   return `${chain.join(" -> ")} (cross-file, ${connection.edgeDistance} file hop${connection.edgeDistance === 1 ? "" : "s"})`;
 }
 
-function describeAmbiguousReason(finding: StructuralFinding): string {
+// H6 phase 2c: generalized over `pattern` — used to hardcode "stripe" and
+// the webhook/db-write/idempotency shape by name (the spike's original
+// single-pattern posture); now reads the matched StructuralPattern's own
+// `packages`/`anchorKinds` fields so the same function covers every entry
+// in STRUCTURAL_PATTERNS without a per-provider branch.
+function describeAmbiguousReason(finding: StructuralFinding, pattern: StructuralPattern): string {
   if (finding.anchors.length === 0) {
-    return '"stripe" is imported somewhere in this repository, but no anchors (webhook verification, DB write, idempotency guard) were found at all — nothing structurally connects it to a payment webhook flow.';
+    return `an import from one of this pattern's own packages (${pattern.packages.join(", ")}) is present somewhere in this repository, but no anchors (${pattern.anchorKinds.join(", ")}) were found at all — nothing structurally connects it to this pattern's shape.`;
   }
   const kindsPresent = new Set(finding.anchors.map((a) => a.kind));
-  const missing = ANCHOR_KIND_ORDER.filter((kind) => !kindsPresent.has(kind));
+  const missing = pattern.anchorKinds.filter((kind) => !kindsPresent.has(kind));
   if (missing.length > 0) {
-    return `missing anchor kind(s): ${missing.join(", ")} — the full webhook -> DB write -> idempotency-guard shape isn't present.`;
+    return `missing anchor kind(s): ${missing.join(", ")} — the full ${pattern.anchorKinds.join(" -> ")} shape isn't present.`;
   }
-  return "all three anchor kinds are present, but not connected closely enough — no same-function/same-file match, and no cross-file import path within 3 hops.";
+  return "all anchor kinds are present, but not connected closely enough — no same-function/same-file match, and no cross-file import path within 3 hops.";
+}
+
+/**
+ * H6 phase 2c — Mercado Pago's optional-anchor cap (see
+ * StructuralPattern.optionalAnchorKinds' own comment in infer.ts) isn't
+ * exposed as its own StructuralFinding field: infer.ts deliberately keeps
+ * `connection` reporting the ACTUAL topology found and only caps
+ * `confidence`, so the cap has to be DERIVED here from those two public
+ * fields rather than read off a dedicated flag.
+ *
+ * The derivation is exact, not a heuristic: inferStructuralSkills' step 1b
+ * (see that function's own doc comment in infer.ts) is the ONLY code path
+ * in the whole module that can ever produce a finding with confidence
+ * "inferred" together with a same-function/same-file `connection.kind` —
+ * every OTHER "inferred" finding comes from the cross-file search
+ * (findInferredTriple/findInferredPair), which can only ever report
+ * `connection.kind === "cross-file"` (see StructuralFinding.connection's
+ * own doc comment: edgeDistance is always 0 for both DIRECT topologies and
+ * 1-3 for cross-file — a same-function/same-file topology is DIRECT-shaped
+ * connectivity by definition). So "inferred confidence + same-function/
+ * same-file topology" is unambiguous evidence the pair-search cap fired for
+ * a pattern that HAS an optionalAnchorKinds entry — not a coincidence of
+ * two independently-chosen fields.
+ *
+ * Known, accepted limit of this derivation: it cannot tell a capped finding
+ * whose pair search happened to land on a CROSS-FILE connection apart from
+ * a genuine (uncapped) cross-file INFERRED finding — both report
+ * `confidence: "inferred"` and `connection.kind: "cross-file"`, and nothing
+ * in the public StructuralFinding shape distinguishes them. This is not a
+ * gap in practice: the confidence label ("inferred") is honest either way,
+ * only the WHY note below would be missing for that one sub-case, and
+ * Mercado Pago's fixtures (test/proof-graph/fixtures.ts) exercise the
+ * same-function cap case, which this derivation always catches correctly.
+ */
+function cappedOptionalAnchorKind(pattern: StructuralPattern, finding: StructuralFinding): AnchorKind | null {
+  if (!pattern.optionalAnchorKinds || pattern.optionalAnchorKinds.length === 0) return null;
+  if (finding.confidence !== "inferred") return null;
+  if (!finding.connection) return null;
+  if (finding.connection.kind !== "same-function" && finding.connection.kind !== "same-file") return null;
+  // Today there is only ever one optional-kind entry per pattern (Mercado
+  // Pago's idempotency-guard) — see optionalAnchorKinds' own comment in
+  // infer.ts on why this stays a table (and this reads its first entry),
+  // not an if/else, for a future pattern with its own optional kind.
+  return pattern.optionalAnchorKinds[0].kind;
 }
 
 /**
@@ -248,9 +310,18 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
       `Unknown skill slug "${opts.skill}" — taxonomy.json is the CLI's only source of valid skill slugs, and this one isn't in it. See taxonomy.json for the full closed list.`
     );
   }
-  if (opts.skill !== STRUCTURAL_SKILL_SLUG) {
+  // H6 phase 2c: the single-slug gate ("only STRUCTURAL_SKILL_SLUG is
+  // explainable" — the phase-1 reviewer note this replaces) is now "slug
+  // must be one of STRUCTURAL_PATTERNS' own slugs" — the pattern table
+  // (infer.ts) is the source of truth for which slugs are explainable, not
+  // a hardcoded name. `pattern` is threaded through the rest of this
+  // function (anchor grouping order, connection rendering, the AMBIGUOUS
+  // WHY text, and the Mercado Pago cap note all read it).
+  const pattern = STRUCTURAL_PATTERNS.find((p) => p.slug === opts.skill);
+  if (!pattern) {
+    const explainableSlugs = [...STRUCTURAL_PATTERNS].map((p) => p.slug).sort();
     throw new ScanError(
-      `"${opts.skill}" is a valid taxonomy.json slug, but only structural detection for "${STRUCTURAL_SKILL_SLUG}" is explainable in this spike (known limit — see docs/proof-graph-spike.md's "Local explain command (H4)" section). Plain import-matching slugs like this one aren't covered by \`redential explain\` yet.`
+      `"${opts.skill}" is a valid taxonomy.json slug, but only these ${explainableSlugs.length} structural patterns are explainable in this spike (known limit — see docs/proof-graph-spike.md's "Multi-provider expansion (H6)" section): ${explainableSlugs.join(", ")}. Plain import-matching slugs like this one aren't covered by \`redential explain\` yet.`
     );
   }
 
@@ -333,12 +404,15 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
   }
   reporter.done();
 
-  if (findings.length === 0) {
+  // STRUCTURAL_PATTERNS now has 6 entries, so inferStructuralSkills returns
+  // up to 6 findings (sorted by slug, see that function's own doc comment)
+  // — this command only ever explains the ONE the caller asked for.
+  const finding = findings.find((f) => f.slug === opts.skill);
+  if (!finding) {
     throw new ScanError(
-      `"${opts.skill}" was not detected in this repository — no payment/webhook-shaped structural signal found at all (no anchors, no "stripe" import anywhere in the current HEAD snapshot).`
+      `"${opts.skill}" was not detected in this repository — no structural signal found at all for this pattern (no anchors, no import from any of its own packages (${pattern.packages.join(", ")}) anywhere in the current HEAD snapshot).`
     );
   }
-  const finding = findings[0];
 
   log(`Skill: ${finding.slug} — ${taxonomyLabel(finding.slug)}`);
   log(`Classification: ${finding.confidence.toUpperCase()} — ${CLASSIFICATION_MEANING[finding.confidence]}`);
@@ -347,12 +421,12 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
   log("Anchors:");
   if (finding.anchors.length === 0) {
     // Only reachable for an AMBIGUOUS finding whose only signal is an
-    // unused "stripe" import (see infer.ts's inferStructuralSkills:
-    // hasStripeExternalImport with zero anchors) — the false-negative case
-    // docs/proof-graph-spike.md's H3 entry documents.
-    log("  (none — no webhook-verification/db-write/idempotency-guard anchors found)");
+    // unused provider-package import (see infer.ts's inferStructuralSkills:
+    // hasExternalImportForPackages with zero anchors) — the false-negative
+    // case docs/proof-graph-spike.md's H3 entry documents.
+    log(`  (none — no ${pattern.anchorKinds.join("/")} anchors found)`);
   }
-  for (const kind of ANCHOR_KIND_ORDER) {
+  for (const kind of pattern.anchorKinds) {
     const hits = finding.anchors.filter((a) => a.kind === kind);
     if (hits.length === 0) continue;
     log(`  ${kind}:`);
@@ -360,7 +434,13 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
   }
   log("");
 
-  log(`Connection: ${renderConnection(graph, finding)}`);
+  log(`Connection: ${renderConnection(graph, finding, pattern)}`);
+  const cappedKind = cappedOptionalAnchorKind(pattern, finding);
+  if (cappedKind) {
+    log(
+      `  Note: confidence is capped at INFERRED, not DIRECT — the "${cappedKind}" anchor is missing everywhere in this repository. This pattern still classifies without it (see StructuralPattern.optionalAnchorKinds in src/proof-graph/infer.ts), but the resulting confidence is capped instead of reaching DIRECT. Connection above still reports the ACTUAL same-function/same-file topology found.`
+    );
+  }
   log("");
 
   const supportingFiles = [...new Set(finding.anchors.map((a) => a.path))];
@@ -378,7 +458,7 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
     } else if (supportingFiles.length > 0) {
       log(`  NO — none of the supporting anchor file(s) (${supportingFiles.join(", ")}) intersect files you've touched`);
     } else {
-      log("  NO — this finding has no supporting anchor files at all (only the file-wide \"stripe\" import signal)");
+      log('  NO — this finding has no supporting anchor files at all (only the file-wide provider-package import signal)');
     }
   }
   log("");
@@ -387,7 +467,7 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
   if (finding.confidence === "ambiguous") {
     log("");
     log(
-      `NOT CLAIMED: this is an AMBIGUOUS finding — it is never claimed, regardless of attribution, and it can never enter a scan/submit bundle (docs/proof-graph-spike.md's "Draft bundle signal" section: AMBIGUOUS never travels in the bundle under any field). Why: ${describeAmbiguousReason(finding)}`
+      `NOT CLAIMED: this is an AMBIGUOUS finding — it is never claimed, regardless of attribution, and it can never enter a scan/submit bundle (docs/proof-graph-spike.md's "Draft bundle signal" section: AMBIGUOUS never travels in the bundle under any field). Why: ${describeAmbiguousReason(finding, pattern)}`
     );
   }
   // searchBounded (src/proof-graph/infer.ts's findInferredTriple): the

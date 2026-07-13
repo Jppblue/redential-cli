@@ -398,3 +398,133 @@ describe("collectUserTouchedFiles", () => {
     expect(touched.size).toBe(0);
   });
 });
+
+// -----------------------------------------------------------------------
+// H6 phase 2a — iap-flow classification, Mercado Pago's optional-
+// idempotency confidence cap, and the ambiguous-anchor-filtering fix (a
+// finding must carry ONLY its own pattern's anchors, never another
+// provider's). Same integration-through-real-pipeline style as every test
+// above (the `infer`/`build` helpers).
+// -----------------------------------------------------------------------
+
+describe("inferStructuralSkills — iap-flow", () => {
+  it("same-function: configure + purchase + entitlement-gate in one function -> DIRECT (same-function), edgeDistance 0", () => {
+    const findings = infer({
+      "a.ts": [
+        'import Purchases from "react-native-purchases";',
+        "async function setupAndGate(customerInfo, pkg) {",
+        "  Purchases.configure({ apiKey: 'abc' });",
+        "  await Purchases.purchasePackage(pkg);",
+        "  return customerInfo.entitlements.active.hasOwnProperty('pro');",
+        "}",
+      ].join("\n"),
+    });
+
+    const finding = findings.find((f) => f.slug === "payments/iap-subscription-flow");
+    expect(finding).toBeDefined();
+    expect(finding!.confidence).toBe("direct");
+    expect(finding!.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+    expect(finding!.anchors.map((a) => a.kind).sort()).toEqual(["iap-configure", "iap-entitlement-gate", "iap-purchase"]);
+  });
+
+  it("react-native-purchases imported, zero IAP anchors -> AMBIGUOUS, claimed=false", () => {
+    const findings = infer({
+      "a.ts": ['import Purchases from "react-native-purchases";', "export const x = 1;"].join("\n"),
+    });
+
+    const finding = findings.find((f) => f.slug === "payments/iap-subscription-flow");
+    expect(finding).toBeDefined();
+    expect(finding!.confidence).toBe("ambiguous");
+    expect(finding!.anchors).toEqual([]);
+    expect(finding!.claimed).toBe(false);
+  });
+});
+
+describe("inferStructuralSkills — Mercado Pago optional-idempotency cap", () => {
+  it("idempotency present (upsert-shaped write) -> normal triple classification, DIRECT reachable", () => {
+    const findings = infer({
+      "a.ts": [
+        'import { MercadoPagoConfig, Preference } from "mercadopago";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "const mpClient = new MercadoPagoConfig({ accessToken: 'x' });",
+        "const preference = new Preference(mpClient);",
+        "",
+        "async function handler(body) {",
+        "  const pref = await preference.create({ body });",
+        "  await prisma.payment.upsert({ where: { id: pref.id }, create: {}, update: {} });",
+        "  return pref;",
+        "}",
+      ].join("\n"),
+    });
+
+    const finding = findings.find((f) => f.slug === "payments/mercadopago-flow");
+    expect(finding).toBeDefined();
+    expect(finding!.confidence).toBe("direct");
+    expect(finding!.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+  });
+
+  it("idempotency globally absent -> capped at INFERRED, even though webhook+db-write are in the SAME function", () => {
+    const findings = infer({
+      "a.ts": [
+        'import { MercadoPagoConfig, Preference } from "mercadopago";',
+        'import { PrismaClient } from "@prisma/client";',
+        "",
+        "const prisma = new PrismaClient();",
+        "const mpClient = new MercadoPagoConfig({ accessToken: 'x' });",
+        "const preference = new Preference(mpClient);",
+        "",
+        "async function handler(body) {",
+        "  const pref = await preference.create({ body });",
+        "  await prisma.payment.create({ data: { id: pref.id } });",
+        "  return pref;",
+        "}",
+      ].join("\n"),
+    });
+
+    const finding = findings.find((f) => f.slug === "payments/mercadopago-flow");
+    expect(finding).toBeDefined();
+    // Never "direct", per the documented cap — even though the pair search
+    // found the two required anchors in the very same function.
+    expect(finding!.confidence).toBe("inferred");
+    expect(finding!.connection).toEqual({ kind: "same-function", edgeDistance: 0 });
+    expect(finding!.anchors.map((a) => a.kind).sort()).toEqual(["db-write", "webhook-verification"]);
+  });
+});
+
+describe("inferStructuralSkills — ambiguous findings carry only their OWN pattern's anchors", () => {
+  it("two providers present (Stripe + PayPal), each ambiguous on its own webhook anchor, never cross-contaminated", () => {
+    const findings = infer({
+      "stripe.ts": [
+        'import Stripe from "stripe";',
+        'const stripe = new Stripe("k");',
+        "export function handleStripeWebhook(req) {",
+        "  return stripe.webhooks.constructEvent(req.body, sig, secret);",
+        "}",
+      ].join("\n"),
+      "paypal.ts": [
+        'import { Client } from "@paypal/paypal-server-sdk";',
+        "export function handlePaypalWebhook(req) {",
+        "  const client = new Client(config);",
+        "  return client.verifyWebhookSignature(req.body);",
+        "}",
+      ].join("\n"),
+    });
+
+    expect(findings).toHaveLength(2);
+
+    const stripeFinding = findings.find((f) => f.slug === "payments/payment-webhook-flow");
+    const paypalFinding = findings.find((f) => f.slug === "payments/paypal-webhook-flow");
+    expect(stripeFinding).toBeDefined();
+    expect(paypalFinding).toBeDefined();
+
+    expect(stripeFinding!.confidence).toBe("ambiguous");
+    expect(stripeFinding!.anchors).toHaveLength(1);
+    expect(stripeFinding!.anchors[0].providerSlug).toBe("payments/payment-webhook-flow");
+
+    expect(paypalFinding!.confidence).toBe("ambiguous");
+    expect(paypalFinding!.anchors).toHaveLength(1);
+    expect(paypalFinding!.anchors[0].providerSlug).toBe("payments/paypal-webhook-flow");
+  });
+});
