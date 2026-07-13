@@ -34,7 +34,7 @@ import { runScan, listAuthors } from "../../src/scan.js";
 import { isKnownPublicHost } from "../../src/public-remote.js";
 import { getRemoteUrl } from "../../src/git.js";
 import { executeExplainCommand } from "../../src/explain-command.js";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -121,9 +121,35 @@ describe("zero network calls during scan", () => {
   // src/ is network-free by default unless explicitly opted in here.
   const NETWORK_ALLOWED_FILES = new Set(["http-client.ts", "login.ts", "submit.ts"]);
 
+  /**
+   * Recursively lists every `.ts` file under `dir` (relative to `srcUrl`,
+   * forward-slash-joined so subdirectory entries compare the same way flat
+   * top-level entries always have). Recursive rather than the flat
+   * `readdirSync` this test used before H5 of the proof-graph spike (see
+   * docs/proof-graph-spike.md) so a subdirectory like `src/proof-graph/`
+   * can't silently escape this static network-API check the way it did
+   * previously — the dynamic zero-network tests above already exercise the
+   * proof-graph pipeline end to end, but the static source-scan is supposed
+   * to be the mechanical, can't-forget-to-run backstop, and a non-recursive
+   * `readdirSync` wasn't actually backstopping subdirectories at all.
+   */
+  function listSrcTsFiles(srcUrl: URL, sub = ""): string[] {
+    const abs = sub ? new URL(sub, srcUrl) : srcUrl;
+    const out: string[] = [];
+    for (const entry of readdirSync(abs)) {
+      const rel = sub ? `${sub}${entry}` : entry;
+      if (statSync(new URL(rel, srcUrl)).isDirectory()) {
+        out.push(...listSrcTsFiles(srcUrl, `${rel}/`));
+      } else if (entry.endsWith(".ts")) {
+        out.push(rel);
+      }
+    }
+    return out;
+  }
+
   it("has no reference to fetch/http/https network APIs outside the allowlisted files", () => {
     const srcUrl = new URL("../../src/", import.meta.url);
-    const files = readdirSync(srcUrl).filter((f) => f.endsWith(".ts") && !NETWORK_ALLOWED_FILES.has(f));
+    const files = listSrcTsFiles(srcUrl).filter((f) => !NETWORK_ALLOWED_FILES.has(f));
     const networkPattern = /\bfetch\(|node:https?['"]|require\(['"]https?['"]\)/;
     for (const file of files) {
       const contents = readFileSync(new URL(file, srcUrl), "utf8");
