@@ -1,6 +1,6 @@
 {
   "$comment": "Closed public vocabulary of skill slugs. This file is the ONLY source of valid values for detected_skills[].slug in the bundle: a slug not listed here makes the bundle invalid. Detection maps signatures/*.json matches to these slugs — deterministically, locally, with zero network calls. Adding a slug requires a PR to this file (and a signature definition); slugs are never hardcoded in the CLI. Placeholder set, to be expanded.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "skills": [
     { "slug": "auth/supabase-auth", "label": "Supabase Auth" },
     { "slug": "auth/nextauth", "label": "NextAuth / Auth.js" },
@@ -208,6 +208,7 @@
     { "slug": "testing/quick-nimble", "label": "Quick / Nimble (Swift BDD testing)" },
     { "slug": "backend/swinject", "label": "Swinject (Swift dependency injection)" },
     { "slug": "frontend/promisekit", "label": "PromiseKit" },
-    { "slug": "db/firebase-firestore", "label": "Firebase Firestore" }
+    { "slug": "db/firebase-firestore", "label": "Firebase Firestore" },
+    { "slug": "payments/payment-webhook-flow", "label": "Payment webhook flow (structural)" }
   ]
 }
