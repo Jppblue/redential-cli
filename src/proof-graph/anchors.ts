@@ -27,6 +27,20 @@ export interface AnchorHit {
   // serialized into a bundle, never leaves the machine, same as every other
   // structure in this spike.
   reason: string;
+  // OPTIONAL, set ONLY on "webhook-verification" hits (H6 multi-provider
+  // generalization): which WEBHOOK_PROVIDERS descriptor (below) produced
+  // this hit, carried as the taxonomy slug that descriptor maps to — e.g.
+  // "payments/payment-webhook-flow" for Stripe. Added as an optional field
+  // rather than a required one so every existing AnchorHit-shaped test
+  // fixture and assertion (toMatchObject / field-by-field checks throughout
+  // test/proof-graph/anchors.test.ts) keeps compiling and passing unchanged;
+  // none of them do an exact-shape toEqual on a non-empty AnchorHit, which
+  // is what made this route safe (see the H6 phase-1 task report). db-write
+  // and idempotency-guard hits never set this — they are already
+  // provider-agnostic (see WEBHOOK_PROVIDERS' own comment) and infer.ts's
+  // single-provider STRUCTURAL_PATTERNS loop (today: just Stripe) doesn't
+  // need it to disambiguate a triple.
+  providerSlug?: string;
 }
 
 // -----------------------------------------------------------------------
@@ -69,6 +83,72 @@ const DB_READ_VERBS = new Set(["findUnique", "findFirst", "findOne", "select", "
 
 const PG_WRITE_SQL = /^\s*(insert|update)\b/i;
 const PG_UPSERT_SQL = /on\s+conflict/i;
+
+// -----------------------------------------------------------------------
+// WEBHOOK_PROVIDERS — H6 multi-provider generalization (see
+// docs/proof-graph-spike.md and this milestone's own doc, phase 1). SPIKE
+// DETECTOR DATA, same status as every other table in this file (see the
+// comment above STRIPE_SPECIFIER etc.): a versioned, in-repo, deterministic
+// pattern table this experimental recognizer walks — NOT the taxonomy
+// authority itself. `slug` below is only meaningful because
+// inferStructuralSkills (infer.ts) cross-checks it against taxonomy.json at
+// runtime before ever producing a finding that names it (defense in depth,
+// same posture as skill-detect.ts's compile()); adding a descriptor here
+// with a slug that isn't ALSO added to taxonomy.json produces a ScanError,
+// never a silent bundle leak.
+//
+// Phase 1 of H6 (this file's current state) ships ONLY the Stripe
+// descriptor — an intentionally provable no-op refactor: the recognizer
+// below now iterates this table instead of hardcoding Stripe's shape, but
+// with exactly one entry the observable behavior is byte-for-byte identical
+// to before the refactor. Phase 2 (a later milestone, not this one) adds
+// the remaining providers' descriptors (PayPal, Mercado Pago, Lemon
+// Squeezy, Paddle, RevenueCat/IAP) alongside their own fixtures and
+// `explain` support.
+export interface WebhookProviderDescriptor {
+  /** Taxonomy slug (taxonomy.json) this provider's webhook pattern produces. */
+  slug: string;
+  /** npm specifiers that identify the provider (mirrors STRIPE_SPECIFIER etc. above). */
+  packages: string[];
+  /**
+   * Call-chain endings that mean "verify webhook" once a call's receiver
+   * has been resolved to one of `packages` — each inner array is checked
+   * against the END of the resolved chain, same rule webhookHits already
+   * applied to Stripe (`["webhooks","constructEvent"]` matches a resolved
+   * chain ending in exactly those two segments, in that order).
+   */
+  verifyChainSuffixes: string[][];
+  /**
+   * Header/signature literal(s) for the weaker file-level fallback (no
+   * receiver resolution at all — see webhookHits' own comment on why that
+   * fallback exists and why it's intentionally weaker).
+   */
+  signatureLiterals: string[];
+}
+
+export const WEBHOOK_PROVIDERS: WebhookProviderDescriptor[] = [
+  {
+    slug: "payments/payment-webhook-flow",
+    packages: [STRIPE_SPECIFIER],
+    verifyChainSuffixes: [
+      ["webhooks", "constructEvent"],
+      ["webhooks", "constructEventAsync"],
+    ],
+    signatureLiterals: ["stripe-signature"],
+  },
+];
+
+// True when `chain`'s LAST `suffix.length` segments equal `suffix`, in
+// order — the generalized version of webhookHits' original inline
+// last/secondLast comparison (`last !== "constructEvent" ... secondLast
+// !== "webhooks"`). A chain shorter than the suffix can never match, the
+// same way the original code's explicit `resolved.chain.length < 2`
+// early-return worked for Stripe's 2-segment suffix.
+function matchesChainSuffix(chain: string[], suffix: string[]): boolean {
+  if (chain.length < suffix.length) return false;
+  const offset = chain.length - suffix.length;
+  return suffix.every((segment, i) => chain[offset + i] === segment);
+}
 
 function fileImportsSpecifier(file: ParsedFile, specifier: string): boolean {
   return file.imports.some((imp) => imp.specifier === specifier);
@@ -154,40 +234,52 @@ function webhookHits(graph: ProofGraph, path: string, file: ParsedFile): AnchorH
     // "webhooks" shape. Checking call.chain directly here would silently
     // never match an alias-resolved call.
     const resolved = resolveReceiver(file, call);
-    if (!resolved || resolved.specifier !== STRIPE_SPECIFIER) continue;
-    if (resolved.chain.length < 2) continue;
-    const last = resolved.chain[resolved.chain.length - 1];
-    const secondLast = resolved.chain[resolved.chain.length - 2];
-    if (last !== "constructEvent" && last !== "constructEventAsync") continue;
-    if (secondLast !== "webhooks") continue;
+    if (!resolved) continue;
+    // H6: iterate WEBHOOK_PROVIDERS instead of hardcoding Stripe. With
+    // today's single-entry table this produces byte-for-byte the same
+    // decision as the old inline `resolved.specifier !== STRIPE_SPECIFIER`
+    // check — see WEBHOOK_PROVIDERS' own comment.
+    const provider = WEBHOOK_PROVIDERS.find((p) => p.packages.includes(resolved.specifier));
+    if (!provider) continue;
+    const matchedSuffix = provider.verifyChainSuffixes.find((suffix) => matchesChainSuffix(resolved.chain, suffix));
+    if (!matchedSuffix) continue;
 
     hits.push({
       kind: "webhook-verification",
       path,
       enclosingFunction: call.enclosingFunction,
       line: call.line,
-      reason: `stripe.webhooks.${last} (receiver resolved to import "stripe")`,
+      reason: `${resolved.specifier}.${matchedSuffix.join(".")} (receiver resolved to import "${resolved.specifier}")`,
+      providerSlug: provider.slug,
     });
   }
 
-  // File-level fallback, explicitly weaker (per the milestone spec): the
-  // literal "stripe-signature" is present somewhere in the file AND the
-  // file externally imports "stripe" — no receiver resolution at all, just
-  // co-location. This is the one place in this module where a hit is
-  // produced WITHOUT resolving a receiver, by design (a header read like
-  // `req.headers['stripe-signature']` is a member access, not a call — see
-  // ParsedFile.literals' own comment in parser-adapter.ts). One hit per
-  // file (the FIRST matching literal, in source order — ParsedFile.literals
-  // is already sorted by position), not one per occurrence: the signal is
-  // "this file reads the header," not a count.
-  const signatureLiteral = file.literals.find((l) => l.value === "stripe-signature");
-  if (signatureLiteral && fileImportsSpecifier(file, STRIPE_SPECIFIER)) {
+  // File-level fallback, explicitly weaker (per the milestone spec): a
+  // provider's signature literal is present somewhere in the file AND the
+  // file externally imports one of that provider's packages — no receiver
+  // resolution at all, just co-location. This is the one place in this
+  // module where a hit is produced WITHOUT resolving a receiver, by design
+  // (a header read like `req.headers['stripe-signature']` is a member
+  // access, not a call — see ParsedFile.literals' own comment in
+  // parser-adapter.ts). One hit per file per provider (the FIRST matching
+  // literal, in source order — ParsedFile.literals is already sorted by
+  // position), not one per occurrence: the signal is "this file reads the
+  // header," not a count. With today's single-entry WEBHOOK_PROVIDERS table
+  // this is exactly one hit at most, same as the old hardcoded Stripe-only
+  // check.
+  for (const provider of WEBHOOK_PROVIDERS) {
+    const matchingSpecifier = provider.packages.find((specifier) => fileImportsSpecifier(file, specifier));
+    if (!matchingSpecifier) continue;
+    const signatureLiteral = file.literals.find((l) => provider.signatureLiterals.includes(l.value));
+    if (!signatureLiteral) continue;
+
     hits.push({
       kind: "webhook-verification",
       path,
       enclosingFunction: signatureLiteral.enclosingFunction,
       line: signatureLiteral.line,
-      reason: 'literal "stripe-signature" present and file imports "stripe" (weaker: file-level fallback, no receiver resolved)',
+      reason: `literal "${signatureLiteral.value}" present and file imports "${matchingSpecifier}" (weaker: file-level fallback, no receiver resolved)`,
+      providerSlug: provider.slug,
     });
   }
 
