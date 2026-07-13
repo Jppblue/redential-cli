@@ -307,4 +307,15 @@ export async function executeExplainCommand(opts: ExplainCommandOptions): Promis
       `NOT CLAIMED: this is an AMBIGUOUS finding — it is never claimed, regardless of attribution, and it can never enter a scan/submit bundle (docs/proof-graph-spike.md's "Draft bundle signal" section: AMBIGUOUS never travels in the bundle under any field). Why: ${describeAmbiguousReason(finding)}`
     );
   }
+  // searchBounded (src/proof-graph/infer.ts's findInferredTriple): the
+  // cross-file search hit its deterministic work budget before finishing,
+  // rather than genuinely failing to find a connected pattern — a distinct
+  // reason for AMBIGUOUS the user should see plainly, in the same friendly,
+  // no-jargon register as the rest of this command's output.
+  if (finding.searchBounded) {
+    log("");
+    log(
+      "Note: the search space for this repository exceeded the deterministic work budget, so the classification degraded to AMBIGUOUS (the pattern may exist but was not fully searched)."
+    );
+  }
 }

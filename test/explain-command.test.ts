@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { executeExplainCommand } from "../src/explain-command.js";
 import { ScanError } from "../src/errors.js";
-import { cleanup } from "./support/fixtures.js";
+import { cleanup, commit, createRepo } from "./support/fixtures.js";
 import {
   USER,
   fixtureCommentsOnly,
@@ -19,6 +19,7 @@ import {
   fixtureLayeredPattern,
   fixtureStripeUnused,
 } from "./proof-graph/fixtures.js";
+import { generateBudgetBustingSourceFiles } from "./proof-graph/scale-fixtures.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -197,5 +198,41 @@ describe("executeExplainCommand", () => {
     expect(output).toContain("DIRECT");
     expect(output).toContain("no commits found for not-a-committer@example.com");
     expect(output).toContain("Claimed: no");
+  });
+
+  // Scale hardening (see docs/proof-graph-spike.md's "Scale hardening"
+  // subsection and src/proof-graph/infer.ts's INFER_WORK_BUDGET /
+  // findInferredTriple): when the cross-file search hits its deterministic
+  // work budget, `explain` must surface that plainly, not just silently
+  // report AMBIGUOUS the same way a genuinely-disconnected pattern would.
+  it("search-space-exceeding fixture: AMBIGUOUS, and the work-budget degradation line is printed", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    // Reuses the exact same engineered-to-exceed-the-budget generator as
+    // test/proof-graph/scale.test.ts's own budget case (130 distinct files
+    // per anchor kind, all importing one shared hub — see
+    // scale-fixtures.ts's own comment on why that guarantees the full
+    // 130^3 = 2,197,000-combination search actually runs, clearing
+    // INFER_WORK_BUDGET's 2,000,000).
+    commit(dir, {
+      message: "add a search-space-exceeding fixture",
+      authorName: USER.name,
+      authorEmail: USER.email,
+      files: generateBudgetBustingSourceFiles({ filesPerKind: 130 }),
+    });
+    const { log, lines } = collectLog();
+
+    await executeExplainCommand({
+      repoPath: dir,
+      skill: "payments/payment-webhook-flow",
+      author: [USER.email],
+      log,
+    });
+
+    const output = lines.join("\n");
+    expect(output).toContain("AMBIGUOUS");
+    expect(output).toContain("Claimed: no");
+    expect(output).toContain("exceeded the deterministic work budget");
+    expect(output).toContain("degraded to AMBIGUOUS");
   });
 });

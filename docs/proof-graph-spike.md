@@ -443,3 +443,185 @@ loosening, and the privacy boundary held under adversarial review. The
 evidence points to GO, with the calibration caveat above carried
 forward as the first thing to check before committing further review
 cost.
+
+## Scale hardening
+
+A follow-up milestone, after section a's "roughly two orders of magnitude
+under budget" measurement above turned out to hold only for the
+80-file/toy-fixture scale it was measured at. Running `redential explain`
+against larger, denser real-shaped repos (many files, many DB call sites
+per file — the realistic shape of a payments-heavy service layer, not a
+pathological input) reproduced a hang: the process never returned and had
+to be killed.
+
+### Diagnosis
+
+Two compounding causes, both in `findInferredTriple`
+(`src/proof-graph/infer.ts`), the function that searches for a cross-file
+INFERRED connection once same-function/same-file DIRECT matching has
+already failed:
+
+1. **A resort bug.** `sortAnchorHits(dbWrite)` was being re-executed on
+   every outer-loop iteration, and `sortAnchorHits(idempotency)` on every
+   `(webhook, dbWrite)` pair — an `O(n log n)` re-sort repeated inside an
+   already-nested loop. The sibling functions in the same file
+   (`findSameFunctionTriple`, `findSameFileTriple`) already hoist their
+   sorts correctly; `findInferredTriple` didn't. Measured impact: roughly a
+   44–50x slowdown on its own, before the second cause is even considered.
+2. **An unbounded search space.** The search iterated every
+   `(webhook anchor, db-write anchor, idempotency anchor)` **instance**
+   triple — `O(W × D × I)` over raw anchor counts. On a realistic dense
+   repo (a service layer with dozens of DB call sites in some files, plus
+   a plausible 10–25% of files touching Stripe somewhere), this reaches
+   billions of combinations well before any bug-fix-level constant-factor
+   improvement could help: a measured 500-file dense fixture produced
+   10.8 billion combinations, ran past 130 seconds, and had to be killed.
+   The existing H1 size caps (`maxFileBytes`/`maxFiles` in
+   `src/proof-graph/snapshot.ts`) bound snapshot *size*, not anchor
+   *count* — a file well under 200 KB can still contain dozens of DB call
+   sites, so those caps could never have prevented this.
+
+### The fix
+
+`findInferredTriple` was rewritten around three changes:
+
+- **Hoisted sorts.** Both `sortAnchorHits` calls now run once, outside
+  every loop — closing cause 1 above, matching the pattern its sibling
+  functions already used.
+- **File-level search, not anchor-instance-level.** Connectivity distance
+  (`distanceBetween`, built on the graph's resolved import edges) is
+  inherently file-level already — it takes paths, never anchors — so
+  multiple anchors of the same kind in the same file always produce
+  identical pairwise distances. The rewrite collapses each anchor kind to
+  its **sorted set of distinct file paths** first, then searches file
+  triples: `|files|` is orders of magnitude below `|anchors|` on exactly
+  the dense repos where the old search blew up. This is an exact
+  equivalence, not an approximation — the file triple minimizing the
+  maximum pairwise distance (≤ 3, per the INFERRED rule) is identical
+  either way, and the specific representative `AnchorHit` picked for each
+  chosen file (the lowest-line anchor of that kind in that file, by the
+  existing `sortAnchorHits` order) is provably the same one the old
+  anchor-instance-level search would have converged on — see
+  `findInferredTriple`'s own doc comment in `src/proof-graph/infer.ts` for
+  the full argument. `test/proof-graph/infer.test.ts` and
+  `test/proof-graph/detection.test.ts`'s existing assertions on the
+  resulting `finding.anchors`/`connection` pass unchanged.
+- **A deterministic work budget, not a wall-clock timeout.** The original
+  ask was "timeout with clean degradation," but a wall-clock cut would
+  make the classification depend on how fast the machine happens to be at
+  the moment it runs — the same repo could classify `inferred` on a
+  fast/idle machine and `ambiguous`-by-timeout on a loaded CI runner or an
+  older laptop, breaking this whole spike's "same input → same output,
+  always" determinism invariant. Instead, `INFER_WORK_BUDGET` (2,000,000)
+  counts real search work against one shared counter — every full
+  file-triple evaluation plus every node a BFS visits while computing a
+  fresh distance — and stops the search once it's exceeded. This gives the
+  same practical guarantee ("this can never hang the terminal") without
+  the nondeterminism: the same graph and anchors always perform the exact
+  same number of counted work units, so they always land on the same side
+  of the budget, on any machine, under any load. `StructuralFinding` gained
+  a new optional field, `searchBounded?: true`, set only when the budget
+  was hit; a search-bounded finding degrades to `ambiguous` and — like
+  every `ambiguous` finding — never claims. `redential explain` prints one
+  extra line in this case, distinguishing "search cut short" from
+  "genuinely not connected."
+- **The BFS itself is depth-capped at 3 (`MAX_EDGE_DISTANCE`), not just
+  the search loop.** `findInferredTriple` only ever cares whether a
+  pairwise file distance is `<= MAX_EDGE_DISTANCE` — anything past that is
+  already treated identically to "unreachable" at the read site. An
+  earlier version of this fix ran the BFS itself uncapped (walking the
+  distance-computing helper's whole connected component every time),
+  which is semantics-preserving but was flagged in review as wasted work
+  that inflates the shared work-budget counter for no benefit: on a
+  large, well-connected repo, `workUnits += <BFS result size>` could add
+  up to a whole component's worth of nodes per distinct anchor file BFS'd
+  from, tripping `INFER_WORK_BUDGET` and spuriously degrading a repo the
+  depth-capped design should classify fully. `bfsDistances` now stops
+  enqueuing neighbors once `currentDistance >= MAX_EDGE_DISTANCE`, so it
+  never visits (or charges work-budget cost for) a node past the radius
+  that could ever matter — see `bfsDistances`' own doc comment in
+  `src/proof-graph/infer.ts` for the semantics-preservation argument
+  (every node the OLD, uncapped BFS returned within the cap is still
+  returned, with the identical distance; only nodes strictly past the cap
+  are pruned, and those already collapsed to "too far, treat as
+  unreachable" at every read site). Measured effect: on the diagnosis
+  harness's larger, sparser `fixture-2000`-shaped fixture, capping cut the
+  BFS-attributable work from 275,220 to 95,321 units (a ~65% reduction)
+  and the infer phase from ~80ms to ~12ms; on the denser
+  `fixture-500-hang`-shaped fixture the reduction was smaller (1,385,550
+  → 1,301,414 units, ~6%) because that fixture's whole connected
+  component already sits mostly within the depth-3 radius. See "Measured
+  before/after" below for the full numbers.
+
+### Snapshot-local exclusions (hygiene, not the hang fix)
+
+While building the scale-hardening test fixtures, four generated-code
+shapes were noticed that `src/churn-exclusions.ts`'s `isExcludedPath`
+doesn't already cover (its own `GENERATED_DIR_PATTERN` only knows
+`dist/`, `build/`, `.next/`, `node_modules/`): `out/` (a Next.js static
+export), `coverage/` (test-coverage reports), `.vercel/` (a deployment
+build cache some repos commit), `storybook-static/` (a built Storybook
+site), any directory literally named `generated/`, and `.min.ts` files.
+`src/proof-graph/snapshot.ts`'s `readHeadSnapshot` now excludes these
+too, **applied snapshot-side only** — `churn-exclusions.ts` itself was
+deliberately left untouched this milestone, so the shipping `scan`
+command's own behavior is unchanged. Upstreaming some or all of these
+into `churn-exclusions.ts` (so the shipping churn/skill-detection path
+benefits too) is a separate future discussion, not decided here.
+
+This is explicitly **not** part of the hang fix: the fixture that
+reproduced the hang (`fixture-500-hang` in the diagnosis harness)
+contained zero generated content — the hang was purely a search-space-size
+problem, reproducible with completely ordinary, non-generated source.
+(One practical note for anyone reusing that diagnosis fixture after this
+change: its content happens to live under a `src/generated/` directory,
+which the new exclusion now filters out entirely at snapshot time — a
+regenerated fixture under a differently-named directory is needed to
+exercise `findInferredTriple` end-to-end through `readHeadSnapshot` going
+forward.)
+
+### Measured before/after
+
+All numbers below are the `inferStructuralSkills`/`findInferredTriple`
+phase specifically (isolated with a phase-by-phase timing harness), on
+fixtures built with the same generator shape as
+`test/proof-graph/scale-fixtures.ts` (distinct-file counts, DB write call
+sites per file, and weak-signal "stripe noise" file fraction are all
+parameters). The "After" column reflects the FINAL fix, including the BFS
+depth cap above — an intermediate version without the depth cap was
+briefly in place during development and is called out separately below
+where the cap made a measurable difference.
+
+| Fixture | Shape | Before (pre-fix) | After (post-fix, depth-capped) |
+|---|---|---|---|
+| 500 files, dense | 150 db-write files × 80 calls/file (12,000 db-write anchor instances), 125 weak-signal stripe-noise files, 10.8 billion instance-level combinations | > 130s, killed (never completed) | infer phase: **108.3ms**; classified `inferred` |
+| 2,000 files | 600 db-write files × 1 call/file, no stripe noise | not separately measured pre-fix (superset of the 500-file case's blowup) | infer phase: **11.8ms**; total pipeline wall time: **1.28s**; classified `inferred` |
+| ~300 files (test suite fixture) | 90 db-write files × 40 calls/file, 20% weak stripe-noise files (real work count: 631,652 — ~3.2x of headroom under the 2,000,000 budget) | would have taken minutes (anchor-instance search over ~3,600+ db-write instances alone) | infer phase: **~28ms**; classified `inferred`, `searchBounded` absent |
+| Engineered budget-exceeding fixture (test suite) | 130 distinct files per anchor kind, star topology (all within distance ≤ 2 of each other, so no early pruning) — 130³ = 2,197,000 file-triple evaluations | n/a (didn't exist pre-fix; the file-level search itself is new) | infer phase: **~54ms**; classified `ambiguous`, `searchBounded: true` (work units: 2,000,001, i.e. cut off exactly one unit past the budget); identical result on repeated runs |
+
+The 500-file dense case is the same shape the original diagnosis reported
+as "10.8e9 combinations, > 130s, killed" — post-fix, the file-level search
+over that same fixture's distinct file counts (2 webhook files, 150
+db-write files, up to ~150 idempotency files once upsert/lookup-before
+-write dual-hits are counted) finishes in well under 200ms.
+
+**Effect of the BFS depth cap specifically** (measured by temporarily
+reverting just the cap, on the same two diagnosis-harness fixtures):
+
+| Fixture | Work units, uncapped BFS | Work units, depth-capped BFS | Reduction | Infer phase, uncapped | Infer phase, capped |
+|---|---|---|---|---|---|
+| 500 files, dense (`fixture-500-hang`-shaped) | 1,385,550 | 1,301,414 | ~6% | ~158ms | ~108–146ms |
+| 2,000 files (`fixture-2000`-shaped) | 275,220 | 95,321 | ~65% | ~80ms | ~12ms |
+
+The cap matters far more on the sparser, larger-component 2,000-file
+fixture than on the denser 500-file one: the 500-file fixture's whole
+connected component already sits mostly within the depth-3 radius (little
+left to prune), while the 2,000-file fixture has a larger component with
+real structure past distance 3 that an uncapped BFS was walking (and
+charging work-budget cost for) for no benefit. This is exactly the
+"500 distinct anchor files × 5000-file component" failure mode the cap
+exists to prevent: on a big enough well-connected repo, uncapped
+per-BFS work could dominate the budget and trigger a spurious
+`searchBounded` degradation that has nothing to do with the actual
+search — the depth-capped design avoids that by construction, not by
+having a large enough budget to absorb it.

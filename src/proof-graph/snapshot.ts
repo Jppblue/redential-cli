@@ -41,6 +41,38 @@ function isTypeScriptSourceFile(path: string): boolean {
   return path.endsWith(".ts") || path.endsWith(".tsx");
 }
 
+// SNAPSHOT-LOCAL extra exclusions, deliberately NOT added to
+// churn-exclusions.ts (isExcludedPath, used below alongside these). These
+// four dirs/patterns are generated-code shapes churn-exclusions.ts doesn't
+// already cover (its own GENERATED_DIR_PATTERN only knows dist/build/.next/
+// node_modules/ — see that file's own comment) — a proof-graph snapshot
+// walking into e.g. a committed `out/` (Next.js static export),
+// `coverage/` (test-coverage HTML/JSON reports), `.vercel/` (deployment
+// build cache some repos commit), `storybook-static/` (a built Storybook
+// site), any directory literally named `generated/`, or a `.min.ts` file
+// would parse checked-in build output as if it were authored source —
+// exactly the kind of false "you wrote this" signal isExcludedPath already
+// exists to prevent for churn, just for a different set of shapes this
+// module happens to be more exposed to (the proof-graph spike parses full
+// file bodies, not just diff churn). Applying them HERE (snapshot-side)
+// rather than editing churn-exclusions.ts keeps the shipping `scan`
+// command's own behavior (which uses churn-exclusions.ts directly, and is
+// explicitly out of scope for this milestone — see CLAUDE.md) completely
+// unchanged; upstreaming some or all of these into churn-exclusions.ts
+// itself is a separate future discussion, not decided here (see
+// docs/proof-graph-spike.md's own note on this).
+//
+// This is hygiene, not the hang fix from this same milestone (see
+// findInferredTriple in infer.ts) — the hang this milestone diagnosed and
+// fixed reproduced with zero generated content in the fixture, purely from
+// anchor-instance search-space size.
+const SNAPSHOT_LOCAL_EXCLUDED_DIR_PATTERN = /(^|\/)(out|coverage|\.vercel|storybook-static|generated)\//i;
+const MINIFIED_TS_PATTERN = /\.min\.ts$/i;
+
+function isSnapshotLocalExcludedPath(path: string): boolean {
+  return SNAPSHOT_LOCAL_EXCLUDED_DIR_PATTERN.test(path) || MINIFIED_TS_PATTERN.test(path);
+}
+
 /**
  * Reads every `.ts`/`.tsx` file at HEAD, entirely from local git objects —
  * never the working tree, so uncommitted edits never leak into the graph
@@ -51,7 +83,9 @@ function isTypeScriptSourceFile(path: string): boolean {
  * Pipeline: enumerate HEAD's tree once (listHeadTreeBlobs), filter to
  * TypeScript source files, drop vendored/lockfile/build-output paths
  * (isExcludedPath — same rationale as skill detection: they'd be false
- * "you wrote this" signals), drop anything over `maxFileBytes` using the
+ * "you wrote this" signals) plus this module's own extra generated-code
+ * exclusions (isSnapshotLocalExcludedPath — see its own comment), drop
+ * anything over `maxFileBytes` using the
  * size ls-tree already reported (no content fetch wasted on a file that's
  * getting dropped anyway), sort and truncate to `maxFiles` for a
  * deterministic result independent of git's own tree-walk order, then
@@ -71,6 +105,7 @@ export async function readHeadSnapshot(repoPath: string, opts: SnapshotOptions =
   for (const entry of entries) {
     if (!isTypeScriptSourceFile(entry.path)) continue;
     if (isExcludedPath(entry.path)) continue;
+    if (isSnapshotLocalExcludedPath(entry.path)) continue;
     if (entry.size > maxFileBytes) {
       // The path itself is never logged (see readHeadBlobContents' doc
       // comment on src/debug.ts's paste-safety invariant) — only the

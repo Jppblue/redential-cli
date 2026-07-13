@@ -50,6 +50,15 @@ export interface StructuralFinding {
    * same-file are, definitionally, zero file-hops apart) and 1-3 for
    * "cross-file" (inferred). */
   connection: null | { kind: "same-function" | "same-file" | "cross-file"; edgeDistance: number };
+  /** Present (always `true`) ONLY when the cross-file INFERRED search hit
+   * INFER_WORK_BUDGET before finishing and this finding degraded to
+   * AMBIGUOUS as a result — see findInferredTriple's own comment on why a
+   * deterministic work budget, not a wall-clock timeout, is what "never
+   * hangs" means for this module. Absent (not just `false`) in every other
+   * case, so a plain `finding.searchBounded` check (no `=== true` needed)
+   * distinguishes "degraded by the budget" from "genuinely not connected
+   * closely enough" or "not even attempted" (DIRECT/no-finding). */
+  searchBounded?: true;
 }
 
 // -----------------------------------------------------------------------
@@ -149,6 +158,41 @@ function buildFileAdjacency(graph: ProofGraph): Map<string, Set<string>> {
   return adjacency;
 }
 
+// Shared by bfsDistances (the search radius BFS itself never needs to
+// explore past) and findInferredTriple (the actual INFERRED-eligibility
+// bound applied to the max of the three pairwise distances) — a single
+// module-level constant so the two can never drift apart. findInferredTriple
+// used to declare its own local copy of this value; bfsDistances is its
+// only other consumer, and both need the exact same number, so hoisting it
+// here is the one-source-of-truth fix, not just a style choice.
+const MAX_EDGE_DISTANCE = 3;
+
+/**
+ * BFS distances from `from`, capped at MAX_EDGE_DISTANCE. findInferredTriple
+ * (this function's only caller, via distanceBetween) only ever cares
+ * whether a distance is `<= MAX_EDGE_DISTANCE` — anything past that is
+ * treated identically to "unreachable" (distanceBetween's own `?? Number
+ * .POSITIVE_INFINITY` fallback for a path not present in the returned map
+ * doesn't distinguish "too far" from "no path at all", and the caller's own
+ * `> MAX_EDGE_DISTANCE` checks treat both the same way).
+ *
+ * Semantics-preserving by construction: BFS visits nodes in non-decreasing
+ * distance order, so stopping enqueue once `currentDistance >=
+ * MAX_EDGE_DISTANCE` never skips a node the caller can actually use —
+ * every node within the cap is still visited and gets its exact correct
+ * distance; only nodes STRICTLY PAST the cap are pruned, and those would
+ * have been read back as "too far, treat as unreachable" anyway. What this
+ * caps is pure waste, not behavior: an uncapped BFS would additionally walk
+ * (and, via INFER_WORK_BUDGET's per-BFS `workUnits += fromA.size`
+ * accounting, pay the work-budget cost for) every remaining node in a large
+ * connected component, even though nothing past distance 3 can ever change
+ * findInferredTriple's outcome. Left uncapped, that inflates the shared
+ * work counter by up to the WHOLE component's size per distinct anchor
+ * file BFS'd from — on a large, well-connected repo (many distinct anchor
+ * files, one big component) that alone can trip INFER_WORK_BUDGET and
+ * spuriously degrade to `searchBounded`/AMBIGUOUS a repo the depth-capped
+ * design should classify fully.
+ */
 function bfsDistances(adjacency: Map<string, Set<string>>, from: string): Map<string, number> {
   const distances = new Map<string, number>([[from, 0]]);
   const queue: string[] = [from];
@@ -156,6 +200,7 @@ function bfsDistances(adjacency: Map<string, Set<string>>, from: string): Map<st
   while (head < queue.length) {
     const current = queue[head++];
     const currentDistance = distances.get(current)!;
+    if (currentDistance >= MAX_EDGE_DISTANCE) continue; // nothing past the cap is ever useful to visit
     for (const neighbor of adjacency.get(current) ?? []) {
       if (!distances.has(neighbor)) {
         distances.set(neighbor, currentDistance + 1);
@@ -166,25 +211,142 @@ function bfsDistances(adjacency: Map<string, Set<string>>, from: string): Map<st
   return distances;
 }
 
+// Deterministic work budget for the cross-file search below (see
+// findInferredTriple's own comment for the full rationale). Counts two
+// things against ONE shared counter: (a) every full (webhook-file,
+// db-write-file, idempotency-file) triple actually evaluated by the inner
+// loop, and (b) every node a BFS visits while computing a fresh distance
+// cache entry — capped at MAX_EDGE_DISTANCE per BFS run (see bfsDistances'
+// own comment): only nodes within the cap can ever affect
+// findInferredTriple's outcome, so walking (and charging work-budget cost
+// for) the rest of a large connected component would be pure waste, not
+// real search work. Both scale with the real work findInferredTriple does,
+// so a single budget bounds the whole search regardless of which of the
+// two dominates for a given repo's shape (many distinct anchor files vs. a
+// large/dense import graph).
+//
+// Why a WORK BUDGET and not a wall-clock timeout (the owner's original ask
+// was "timeout with clean degradation"): a wall-clock cut makes the
+// classification depend on how fast the machine happens to be at the
+// moment it runs — the same repo could classify INFERRED on a fast/idle
+// machine and AMBIGUOUS-by-timeout on a loaded CI runner or an older
+// laptop, which breaks this whole spike's "same input -> same output,
+// always" invariant (see this file's own module doc comment and
+// docs/proof-graph-spike.md's Invariants). A deterministic unit count gives
+// the exact same guarantee the owner actually wants ("this can never hang
+// the terminal") without that nondeterminism: the same graph + same
+// anchors always perform the exact same number of counted work units, so
+// they always land on the same side of the budget, on any machine, under
+// any load.
+//
+// Value: comfortably above every normal (even fairly dense) repo's real
+// work count — see test/proof-graph/scale.test.ts's "300 files, 40 db
+// calls/file, 20% stripe noise" case, measured at 631,652 work units
+// (~3.2x of headroom under this budget, not the "order of magnitude" this
+// comment used to (incorrectly) claim before the number was actually
+// measured) — and comfortably below the territory where the PRE-FIX
+// anchor-instance-level search used to hang (this file-level rewrite's
+// worst case is bounded by distinct FILE counts, not anchor INSTANCE
+// counts, so it never gets remotely close to this budget on realistic
+// repos in the first place; the budget exists for the
+// pathological/adversarial shapes that push distinct-file counts high too
+// — see scale.test.ts's dedicated budget-exceeding case). 3.2x is real
+// headroom, not a thin margin: that scale.test.ts fixture is already
+// engineered to be denser than any real repo measured so far (see
+// docs/proof-graph-spike.md's "Scale hardening" before/after table), and
+// the BFS depth cap above additionally keeps large-but-well-connected real
+// repos (e.g. fixture-2000 in the diagnosis harness) well under budget too
+// — see that same table for the measured before/after work counts.
+export const INFER_WORK_BUDGET = 2_000_000;
+
 /**
  * Finds the anchor triple (one per kind) whose maximum pairwise
  * file-adjacency distance is smallest and <= 3, per the milestone's INFERRED
  * rule. Only reached once findSameFileTriple has already failed to find a
  * single file holding all 3 kinds — so by construction every candidate
  * triple here spans more than one file, satisfying "across multiple files".
- * Returns null if no combination connects within the 3-edge bound (or at
- * all — an unreachable pair yields an effectively infinite distance).
+ *
+ * FILE-LEVEL search, not anchor-INSTANCE-level (the pre-fix version of this
+ * function searched every (webhook anchor, db-write anchor, idempotency
+ * anchor) INSTANCE triple — O(W×D×I) over anchor counts, which on a dense
+ * real repo (many DB call sites per file) reaches billions of combinations;
+ * see docs/proof-graph-spike.md's "Scale hardening" subsection for the full
+ * diagnosis). Connectivity distance (distanceBetween, via graph import
+ * edges) is inherently FILE-level already — distanceBetween takes paths,
+ * never anchors — so multiple anchors of the same kind in the same file are
+ * indistinguishable for the purpose of this search: they always produce the
+ * exact same pairwise distances. Collapsing each anchor kind to its sorted
+ * set of DISTINCT FILES first (distinctSortedPaths) and searching FILE
+ * triples is therefore an exact equivalence, not an approximation: |files|
+ * is orders of magnitude below |anchors| on exactly the dense repos where
+ * the old search blew up, while the set of (file-triple, edgeDistance)
+ * pairs it can find is identical.
+ *
+ * Determinism of the file-triple search matches the pre-fix anchor-level
+ * one exactly: sortAnchorHits' (path, then line) order means that, for a
+ * fixed path, the FIRST anchor of a given kind encountered in sorted order
+ * is always the lowest-line one in that file — so the old nested loop over
+ * sorted ANCHOR instances visited each distinct file's anchors as a
+ * contiguous run, all sharing the same pairwise distances, in the exact
+ * same file-visitation order this function's nested loop over sorted
+ * DISTINCT FILES uses. A "first found wins ties" search (this function's
+ * `<` comparison, unchanged) therefore converges on the identical
+ * (best.wPath, best.dPath, best.iPath) triple either way — and once that
+ * file triple is fixed, pickRepresentativeAnchor's "first by
+ * sortAnchorHits order" selection recovers exactly the specific AnchorHit
+ * (lowest line in that file) the old anchor-level loop would have picked as
+ * part of the very same first-found triple. See
+ * test/proof-graph/infer.test.ts / detection.test.ts, whose assertions on
+ * the resulting `finding.anchors`/`connection` are unchanged by this
+ * rewrite.
+ *
+ * Returns `{ result: null, bounded: false }` if no combination connects
+ * within the 3-edge bound (or at all). Returns `{ result: null, bounded:
+ * true }` if INFER_WORK_BUDGET is exhausted before the search finishes —
+ * the caller treats this exactly like "not connected" (AMBIGUOUS) but
+ * additionally marks the finding as `searchBounded`, per this module's own
+ * "never claims from an incomplete search" posture: a partially-completed
+ * search might have been about to find a connected triple, so reporting
+ * "not found" plainly (without the budget flag) would be misleading, but
+ * reporting whatever partial "best so far" the search had would make the
+ * result depend on iteration order/budget placement in a way that isn't a
+ * genuine claim about the repo's structure either. Discarding the partial
+ * best and flagging the degradation is the deterministic, honest answer.
  */
 function findInferredTriple(
   adjacency: Map<string, Set<string>>,
   webhook: AnchorHit[],
   dbWrite: AnchorHit[],
   idempotency: AnchorHit[]
-): { triple: Triple; edgeDistance: number } | null {
-  const MAX_EDGE_DISTANCE = 3;
-  // BFS is run at most once per distinct source file across the whole
+): { result: { triple: Triple; edgeDistance: number } | null; bounded: boolean } {
+  // MAX_EDGE_DISTANCE is now a module-level constant (shared with
+  // bfsDistances' own depth cap) — see its own comment above bfsDistances.
+
+  const distinctSortedPaths = (hits: AnchorHit[]): string[] => {
+    const seen = new Set<string>();
+    const paths: string[] = [];
+    for (const hit of sortAnchorHits(hits)) {
+      if (!seen.has(hit.path)) {
+        seen.add(hit.path);
+        paths.push(hit.path);
+      }
+    }
+    return paths;
+  };
+
+  const webhookFiles = distinctSortedPaths(webhook);
+  const dbWriteFiles = distinctSortedPaths(dbWrite);
+  const idempotencyFiles = distinctSortedPaths(idempotency);
+
+  // ONE shared counter for the whole search — see INFER_WORK_BUDGET's own
+  // comment on what it counts and why a single counter (not one per
+  // sub-search) is the right unit of "how much work has this search done".
+  let workUnits = 0;
+  let bounded = false;
+
+  // BFS is run at most once per distinct source FILE across the whole
   // search (cached here), not once per candidate pair — cheap even with
-  // several anchors of the same kind spread across several files.
+  // several distinct anchor files on each side.
   const distanceCache = new Map<string, Map<string, number>>();
   const distanceBetween = (a: string, b: string): number => {
     if (a === b) return 0;
@@ -192,25 +354,64 @@ function findInferredTriple(
     if (!fromA) {
       fromA = bfsDistances(adjacency, a);
       distanceCache.set(a, fromA);
+      // Counted once per fresh BFS (cache miss), not per lookup: a cached
+      // distanceBetween call is an O(1) map read, not real search work.
+      workUnits += fromA.size;
     }
     return fromA.get(b) ?? Number.POSITIVE_INFINITY;
   };
 
-  let best: { triple: Triple; edgeDistance: number } | null = null;
-  for (const w of sortAnchorHits(webhook)) {
-    for (const d of sortAnchorHits(dbWrite)) {
-      const wd = distanceBetween(w.path, d.path);
+  let best: { wPath: string; dPath: string; iPath: string; edgeDistance: number } | null = null;
+
+  searchLoop: for (const wPath of webhookFiles) {
+    for (const dPath of dbWriteFiles) {
+      if (workUnits > INFER_WORK_BUDGET) {
+        bounded = true;
+        break searchLoop;
+      }
+      const wd = distanceBetween(wPath, dPath);
+      if (workUnits > INFER_WORK_BUDGET) {
+        bounded = true;
+        break searchLoop;
+      }
       if (wd > MAX_EDGE_DISTANCE) continue; // the max of the three can only grow from here
-      for (const i of sortAnchorHits(idempotency)) {
-        const wi = distanceBetween(w.path, i.path);
-        const di = distanceBetween(d.path, i.path);
+      for (const iPath of idempotencyFiles) {
+        workUnits++; // one file-triple evaluation
+        if (workUnits > INFER_WORK_BUDGET) {
+          bounded = true;
+          break searchLoop;
+        }
+        const wi = distanceBetween(wPath, iPath);
+        const di = distanceBetween(dPath, iPath);
         const maxDistance = Math.max(wd, wi, di);
         if (maxDistance > MAX_EDGE_DISTANCE) continue;
-        if (!best || maxDistance < best.edgeDistance) best = { triple: [w, d, i], edgeDistance: maxDistance };
+        if (!best || maxDistance < best.edgeDistance) best = { wPath, dPath, iPath, edgeDistance: maxDistance };
       }
     }
   }
-  return best;
+
+  if (bounded) return { result: null, bounded: true };
+  if (!best) return { result: null, bounded: false };
+
+  // Deterministically recover the representative AnchorHit per chosen file
+  // — first by sortAnchorHits order (path, then line) — see this
+  // function's own doc comment for why this is an exact match for what the
+  // pre-fix anchor-instance-level search would have picked.
+  const pickRepresentativeAnchor = (hits: AnchorHit[], path: string): AnchorHit => {
+    const found = sortAnchorHits(hits).find((h) => h.path === path);
+    // Defensive only: `path` always comes from `hits` itself via
+    // distinctSortedPaths above, so a miss here would mean this function's
+    // own invariant broke, not a real runtime condition.
+    if (!found) throw new ScanError(`Internal error: no anchor found for path "${path}" while resolving an INFERRED triple.`);
+    return found;
+  };
+
+  const triple: Triple = [
+    pickRepresentativeAnchor(webhook, best.wPath),
+    pickRepresentativeAnchor(dbWrite, best.dPath),
+    pickRepresentativeAnchor(idempotency, best.iPath),
+  ];
+  return { result: { triple, edgeDistance: best.edgeDistance }, bounded: false };
 }
 
 // -----------------------------------------------------------------------
@@ -237,7 +438,8 @@ function buildFinding(
   confidence: StructuralConfidence,
   supportingAnchors: AnchorHit[],
   connection: StructuralFinding["connection"],
-  userTouchedFiles: ReadonlySet<string>
+  userTouchedFiles: ReadonlySet<string>,
+  searchBounded?: true
 ): StructuralFinding {
   // Attribution is computed over the anchors that actually SUPPORT this
   // finding (the chosen triple for direct/inferred; whatever partial
@@ -249,7 +451,7 @@ function buildFinding(
   // claims regardless of attribution; direct/inferred claim only when
   // attributed.
   const claimed = confidence !== "ambiguous" && attributed;
-  return {
+  const finding: StructuralFinding = {
     slug: STRUCTURAL_SKILL_SLUG,
     confidence,
     attributed,
@@ -257,6 +459,11 @@ function buildFinding(
     anchors: sortAnchorHits(supportingAnchors),
     connection,
   };
+  // Only ever set (to `true`) when the caller explicitly passes it — see
+  // StructuralFinding.searchBounded's own comment on why "absent" (not
+  // "false") is this field's normal state.
+  if (searchBounded) finding.searchBounded = true;
+  return finding;
 }
 
 /**
@@ -314,10 +521,26 @@ export function inferStructuralSkills(
 
     const adjacency = buildFileAdjacency(graph);
     const inferred = findInferredTriple(adjacency, webhookAnchors, dbWriteAnchors, idempotencyAnchors);
-    if (inferred) {
+    if (inferred.result) {
       return [
-        buildFinding("inferred", inferred.triple, { kind: "cross-file", edgeDistance: inferred.edgeDistance }, userTouchedFiles),
+        buildFinding(
+          "inferred",
+          inferred.result.triple,
+          { kind: "cross-file", edgeDistance: inferred.result.edgeDistance },
+          userTouchedFiles
+        ),
       ];
+    }
+    if (inferred.bounded) {
+      // The cross-file search never finished — degrade to AMBIGUOUS with
+      // `searchBounded` set (see findInferredTriple's own comment). All
+      // three anchor kinds are already known to be present at this point
+      // (the outer `if` above), so this always fires; falling through to
+      // the plain hasStripeExternalImport/webhookAnchors check below would
+      // reach the same AMBIGUOUS outcome anyway, but WITHOUT the
+      // searchBounded flag a caller needs to tell "not connected" apart
+      // from "search cut short".
+      return [buildFinding("ambiguous", anchors, null, userTouchedFiles, true)];
     }
   }
 

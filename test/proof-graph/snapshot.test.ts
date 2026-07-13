@@ -114,4 +114,46 @@ describe("readHeadSnapshot", () => {
 
     expect(files).toEqual([]);
   });
+
+  // Snapshot-LOCAL extra exclusions (see snapshot.ts's own comment on why
+  // these live here and not in churn-exclusions.ts): generated-code shapes
+  // churn-exclusions.ts's own GENERATED_DIR_PATTERN doesn't already cover.
+  it("excludes out/, coverage/, .vercel/, storybook-static/, and any 'generated' path segment", async () => {
+    const dir = repo();
+    commit(dir, {
+      message: "x",
+      authorName: "You",
+      authorEmail: "you@example.com",
+      files: {
+        "src/kept.ts": "export const kept = true;\n",
+        "out/exported.ts": "export const built = true;\n",
+        "coverage/report.ts": "export const covered = true;\n",
+        ".vercel/output.ts": "export const deployed = true;\n",
+        "storybook-static/preview.ts": "export const story = true;\n",
+        "src/generated/client.ts": "export const codegen = true;\n",
+        "packages/api/generated/types.ts": "export const nested = true;\n",
+      },
+    });
+
+    const files = await readHeadSnapshot(dir);
+
+    expect(files.map((f) => f.path)).toEqual(["src/kept.ts"]);
+  });
+
+  it("excludes .min.ts files, keeping non-minified .ts files with a similar name", async () => {
+    const dir = repo();
+    commit(dir, {
+      message: "x",
+      authorName: "You",
+      authorEmail: "you@example.com",
+      files: {
+        "src/bundle.ts": "export const kept = true;\n",
+        "src/bundle.min.ts": "export const minified = true;\n",
+      },
+    });
+
+    const files = await readHeadSnapshot(dir);
+
+    expect(files.map((f) => f.path)).toEqual(["src/bundle.ts"]);
+  });
 });
