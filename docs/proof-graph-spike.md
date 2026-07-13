@@ -122,6 +122,72 @@ These hold for the whole spike, unconditionally:
   below evaluated against real fixtures, and a go/no-go recommendation for
   the owner.
 
+### Local explain command (H4)
+
+`redential explain <skill>` prints a local, human-readable breakdown of the
+structural tier's classification for one HEAD snapshot — no network call, no
+file written anywhere, no `--json`/machine-readable mode.
+
+Usage:
+
+```
+redential explain payments/payment-webhook-flow [--repo <path>] [--author <email> ...]
+```
+
+`<skill>` must be a slug in `taxonomy.json`. In the spike, only
+`payments/payment-webhook-flow` (`STRUCTURAL_SKILL_SLUG`,
+`src/proof-graph/infer.ts`) is actually explainable — this is the spike's one
+target shape. Any other valid taxonomy slug (e.g. `payments/stripe`, a
+plain import-matching slug) gets a friendly "not covered by explain in the
+spike" message and exits 1: the structural tier's whole point is the
+payments/webhook shape, and generalizing `explain` to Tier 1's import
+matches is out of this milestone's scope. An unknown slug (not in
+`taxonomy.json` at all) is a usage error citing `taxonomy.json` as the
+vocabulary source, also exit 1.
+
+What it shows: the skill's slug and taxonomy label; the classification
+(`DIRECT`/`INFERRED`/`AMBIGUOUS`) with a one-line meaning; the matched
+anchors grouped by kind (webhook-verification / db-write /
+idempotency-guard), each with its file path, enclosing function, line, and
+the `reason` string the recognizer produced; how the anchors connect
+(rendered as a plain "`a.ts -> b.ts -> c.ts`" chain for a cross-file
+INFERRED finding, derived from the graph's own resolved import edges — see
+`src/explain-command.ts`'s `renderConnection`); the attribution verdict
+(which anchor file(s), if any, intersect the selected author's own
+added-lines diff) and why; and whether the skill is claimed. A repository
+with no structural finding at all prints a friendly "not detected" message
+and exits 1.
+
+For an `AMBIGUOUS` finding, the output states explicitly that the skill is
+**not claimed**, why (pattern not connected closely enough, or an anchor
+kind is missing entirely), and that an ambiguous finding can never enter a
+`scan`/`submit` bundle regardless of attribution — matching the "Draft
+bundle signal" section below.
+
+Author selection is deliberately **non-interactive**, unlike `scan`'s
+prompted picker: `scan`'s interactive confirmation exists because a bundle
+is about to be built and uploaded, so getting "this is really me" right
+matters for what leaves the machine. `explain` never builds or sends
+anything — it's a read-only local diagnostic that should run unattended (by
+a script, by a test, by a developer piping it around). It defaults to the
+repo's own `git config user.email` if set, and `--author <email>`
+(repeatable) always overrides that default. If the resolved author
+identity(ies) matched no commits at all, `explain` still runs full
+detection over the HEAD snapshot (detection is independent of attribution)
+and honestly reports "no commits found for `<email(s)>`" rather than
+silently producing a misleading verdict.
+
+Screen-vs-bundle boundary: everything `explain` prints (paths, function
+names, line numbers, reasons) is local, on-screen-only output — printing it
+to the user's own terminal is correct and never leaves the machine that
+way. It is not, and must never become, part of `scan`'s bundle or anything
+`submit` uploads — see this document's "Invariants" above and
+`StructuralFinding`'s own comment in `src/proof-graph/infer.ts`. No
+`--json` flag exists on purpose: a structured output mode would be a
+standing invitation for some other tool to capture and persist a
+serialization of the in-memory graph, which the "In-memory only" invariant
+above forbids.
+
 ## Exclusions
 
 Explicitly out of scope for this spike:

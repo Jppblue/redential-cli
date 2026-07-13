@@ -6,6 +6,7 @@ import { ScanError, AuthError, SubmitError, NetworkError } from "./errors.js";
 import { executeScanCommand } from "./scan-command.js";
 import { executeSubmitCommand } from "./submit-command.js";
 import { executeStatusCommand } from "./status-command.js";
+import { executeExplainCommand } from "./explain-command.js";
 import { runLogin } from "./login.js";
 import { runLogout } from "./logout.js";
 import { shouldUsePlainOutput } from "./summary.js";
@@ -145,6 +146,29 @@ program
         toolVersion: getToolVersion(),
         isTTY: process.stdout.isTTY === true,
         plain: shouldUsePlainOutput(process.platform, process.env),
+      })
+    );
+  });
+
+program
+  .command("explain")
+  .description(
+    "Local-only: explain the structural detection for one skill (spike — payments/payment-webhook-flow only). Zero network, no output written anywhere."
+  )
+  .argument("<skill>", "taxonomy.json skill slug to explain")
+  .option("--repo <path>", "path to the git repository to inspect", ".")
+  .option(
+    "--author <email>",
+    "author email to attribute against (repeatable); defaults to `git config user.email`",
+    collect,
+    [] as string[]
+  )
+  .action(async (skill: string, options: { repo: string; author: string[] }) => {
+    await run(() =>
+      executeExplainCommand({
+        repoPath: resolve(options.repo),
+        skill,
+        author: options.author,
       })
     );
   });

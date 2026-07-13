@@ -33,6 +33,7 @@ import { cleanup, commit, createRepo, setRemote } from "../support/fixtures.js";
 import { runScan, listAuthors } from "../../src/scan.js";
 import { isKnownPublicHost } from "../../src/public-remote.js";
 import { getRemoteUrl } from "../../src/git.js";
+import { executeExplainCommand } from "../../src/explain-command.js";
 import { readFileSync, readdirSync } from "node:fs";
 
 const dirs: string[] = [];
@@ -71,6 +72,39 @@ describe("zero network calls during scan", () => {
       toolVersion: "0.1.0",
       configDir,
     });
+
+    expect(mocks.httpRequest).not.toHaveBeenCalled();
+    expect(mocks.httpGet).not.toHaveBeenCalled();
+    expect(mocks.httpsRequest).not.toHaveBeenCalled();
+    expect(mocks.httpsGet).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  // H4 of the proof-graph spike (docs/proof-graph-spike.md): `explain` is
+  // local-only, same posture as `scan` above — same technique (drive the
+  // real command, assert none of the mocked network entry points fired),
+  // alongside the scan test rather than folded into it. This fixture has no
+  // structural pattern at all, so explain is expected to reject with its
+  // "not detected" ScanError (test/explain-command.test.ts already covers
+  // that message's content) — the point here is only that the whole
+  // pipeline leading up to that rejection never touches the network.
+  it("never touches http/https during `redential explain`, even on a repo with a public-looking remote", async () => {
+    const dir = createRepo();
+    dirs.push(dir);
+    setRemote(dir, "https://github.com/acme/example.git");
+    commit(dir, {
+      message: "x",
+      authorName: "You",
+      authorEmail: "you@example.com",
+      files: { "a.ts": "1\n" },
+    });
+
+    await executeExplainCommand({
+      repoPath: dir,
+      skill: "payments/payment-webhook-flow",
+      author: ["you@example.com"],
+      log: () => {},
+    }).catch(() => {}); // expected ScanError ("not detected") — irrelevant to this test
 
     expect(mocks.httpRequest).not.toHaveBeenCalled();
     expect(mocks.httpGet).not.toHaveBeenCalled();
