@@ -42,7 +42,42 @@ export interface ParsedCall {
   chain: string[];
   line: number; // 1-based
   enclosingFunction: string | null; // ParsedFunction.name of the innermost enclosing declared function, or null at module top level
+  // String-literal arguments passed DIRECTLY to this call (not nested inside
+  // another expression) — a plain string literal or a template literal
+  // WITHOUT substitutions (a template WITH substitutions, e.g. `INSERT
+  // ${x}`, has no single static text and is deliberately not captured here;
+  // see H2's anchors.ts for the documented consequence). Added for H2 (see
+  // docs/proof-graph-spike.md): the db-write recognizer needs to see
+  // `pool.query("INSERT ...")`'s literal text, which chain/line alone can't
+  // give it. Each entry capped at ARG_STRING_MAX_CHARS; longer strings are
+  // truncated (kept, not dropped) since even a truncated prefix is still
+  // useful for an `/^\s*insert\b/i`-style match.
+  stringArgs: string[];
+  // Top-level property names of any object-literal argument passed directly
+  // to this call, e.g. `f({ idempotencyKey: x })` -> ["idempotencyKey"].
+  // Only identifier or string-literal keys are recorded (computed keys
+  // aren't a static name without evaluation, same posture as chainOf's "*"
+  // for computed member access — but here there's no fixed-arity slot to
+  // fill with a placeholder, so a computed key is simply omitted rather than
+  // represented). Spread properties (`{ ...rest }`) contribute no name of
+  // their own and are skipped. Added for H2's idempotency-guard recognizer
+  // (`{ idempotencyKey: ... }`).
+  argPropertyNames: string[];
 }
+
+// String-literal call arguments are capped at 200 chars (truncated, not
+// dropped) — long enough to hold a realistic SQL statement or similar, short
+// enough to keep the in-memory graph bounded regardless of how large a
+// literal a user's source happens to contain.
+const ARG_STRING_MAX_CHARS = 200;
+
+// File-wide literals (ParsedFile.literals, below) use a tighter cap: they
+// exist to catch short marker-like strings (header names, event-type
+// strings) a recognizer checks for PRESENCE of, not content to pattern-match
+// — a literal longer than this is prose/data, not a marker, and is skipped
+// entirely (not truncated) so a truncated prefix of a long string can never
+// accidentally collide with a short marker literal.
+const FILE_LITERAL_MAX_CHARS = 100;
 
 export type BindingSource =
   | { kind: "new"; chain: string[] } // const stripe = new Stripe(...) -> chain ["Stripe"]
@@ -54,12 +89,29 @@ export interface ParsedBinding {
   source: BindingSource;
 } // same-file const/let/var bindings only
 
+// A single string-literal occurrence anywhere in the file (not just inside
+// a call argument) — see ParsedFile.literals below for why this exists
+// alongside ParsedCall.stringArgs.
+export interface ParsedLiteral {
+  value: string; // truncation never applies here — anything over FILE_LITERAL_MAX_CHARS is skipped entirely, not truncated
+  line: number; // 1-based
+  enclosingFunction: string | null; // same convention as ParsedCall.enclosingFunction
+}
+
 export interface ParsedFile {
   path: string;
   imports: ParsedImport[];
   functions: ParsedFunction[];
   calls: ParsedCall[];
   bindings: ParsedBinding[];
+  // Every string literal (plain or no-substitution template) in the file
+  // whose text is at most FILE_LITERAL_MAX_CHARS long. Added for H2: a
+  // recognizer like "the Stripe webhook signature header is read somewhere
+  // in this file" (`req.headers['stripe-signature']`) is a MEMBER ACCESS on
+  // a literal, not a call — ParsedCall.stringArgs can't see it, since
+  // there's no enclosing call to attach it to. This is deliberately
+  // file-wide and NOT scoped to calls, unlike stringArgs.
+  literals: ParsedLiteral[];
 }
 
 export interface ParserAdapter {
@@ -67,7 +119,7 @@ export interface ParserAdapter {
 }
 
 function emptyParsedFile(path: string): ParsedFile {
-  return { path, imports: [], functions: [], calls: [], bindings: [] };
+  return { path, imports: [], functions: [], calls: [], bindings: [], literals: [] };
 }
 
 // The four syntax kinds the spike treats as a "declared function" — the
@@ -238,9 +290,55 @@ function toImport(node: ts.ImportDeclaration): ParsedImport | null {
   return { specifier, bindings };
 }
 
+// A node's own static string text — a plain string literal, or a template
+// literal with NO substitutions (`` `foo` `` has one; `` `foo ${x}` `` is a
+// TemplateExpression, a different node kind entirely, and doesn't reach
+// here). undefined for anything else, including a template WITH
+// substitutions — that's the one documented gap (see ParsedCall.stringArgs'
+// own comment and H2's anchors.ts tests for the concrete consequence).
+function staticStringText(node: ts.Node): string | undefined {
+  return ts.isStringLiteralLike(node) ? node.text : undefined;
+}
+
+function truncate(text: string, maxChars: number): string {
+  return text.length > maxChars ? text.slice(0, maxChars) : text;
+}
+
+// Top-level property names of one object-literal argument. Only
+// PropertyAssignment / ShorthandPropertyAssignment / method / accessor
+// members carry a `.name`; a SpreadAssignment (`{ ...rest }`) doesn't and is
+// skipped outright — see ParsedCall.argPropertyNames' own comment for why a
+// computed key is also omitted rather than represented.
+function objectLiteralPropertyNames(obj: ts.ObjectLiteralExpression): string[] {
+  const names: string[] = [];
+  for (const prop of obj.properties) {
+    if (ts.isSpreadAssignment(prop)) continue;
+    const name = prop.name;
+    if (name && (ts.isIdentifier(name) || ts.isStringLiteral(name))) names.push(name.text);
+  }
+  return names;
+}
+
 function toCall(node: ts.CallExpression, sourceFile: ts.SourceFile): ParsedCall {
+  const stringArgs: string[] = [];
+  const argPropertyNames: string[] = [];
+  for (const arg of node.arguments) {
+    const text = staticStringText(arg);
+    if (text !== undefined) stringArgs.push(truncate(text, ARG_STRING_MAX_CHARS));
+    else if (ts.isObjectLiteralExpression(arg)) argPropertyNames.push(...objectLiteralPropertyNames(arg));
+  }
   return {
     chain: chainOf(node.expression),
+    line: lineOf(sourceFile, node.getStart(sourceFile)),
+    enclosingFunction: enclosingFunctionName(node, sourceFile),
+    stringArgs,
+    argPropertyNames,
+  };
+}
+
+function toLiteral(node: ts.StringLiteralLike, sourceFile: ts.SourceFile): ParsedLiteral {
+  return {
+    value: node.text,
     line: lineOf(sourceFile, node.getStart(sourceFile)),
     enclosingFunction: enclosingFunctionName(node, sourceFile),
   };
@@ -269,17 +367,26 @@ function collectNodes(sourceFile: ts.SourceFile): {
   functionNodes: FunctionLikeNode[];
   callNodes: ts.CallExpression[];
   varDecls: ts.VariableDeclaration[];
+  literalNodes: ts.StringLiteralLike[];
 } {
   const importNodes: ts.ImportDeclaration[] = [];
   const functionNodes: FunctionLikeNode[] = [];
   const callNodes: ts.CallExpression[] = [];
   const varDecls: ts.VariableDeclaration[] = [];
+  const literalNodes: ts.StringLiteralLike[] = [];
 
   function visit(node: ts.Node): void {
     if (ts.isImportDeclaration(node)) importNodes.push(node);
     else if (isFunctionLikeNode(node)) functionNodes.push(node);
     else if (ts.isCallExpression(node)) callNodes.push(node);
     else if (ts.isVariableDeclaration(node)) varDecls.push(node);
+    // Not mutually exclusive with the branches above by construction (a
+    // string literal is never also an import/function/call/varDecl node),
+    // so this stays a plain `if`, not an `else if` chain member — it's
+    // still only ever one branch per node in practice, just checked
+    // independently for clarity about why it isn't "the same kind of thing"
+    // as the other four.
+    if (ts.isStringLiteralLike(node)) literalNodes.push(node);
     // Recurse into every node's children regardless of which branch above
     // matched — e.g. a function-like node's own body still needs walking for
     // nested calls/functions, and a call expression's arguments can contain
@@ -287,7 +394,7 @@ function collectNodes(sourceFile: ts.SourceFile): {
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
-  return { importNodes, functionNodes, callNodes, varDecls };
+  return { importNodes, functionNodes, callNodes, varDecls, literalNodes };
 }
 
 // `ts.forEachChild` already visits children in source order, so the arrays
@@ -300,7 +407,7 @@ function bySourcePosition<T extends ts.Node>(nodes: T[], sourceFile: ts.SourceFi
 }
 
 function buildParsedFile(path: string, sourceFile: ts.SourceFile): ParsedFile {
-  const { importNodes, functionNodes, callNodes, varDecls } = collectNodes(sourceFile);
+  const { importNodes, functionNodes, callNodes, varDecls, literalNodes } = collectNodes(sourceFile);
   const imports = bySourcePosition(importNodes, sourceFile)
     .map(toImport)
     .filter((x): x is ParsedImport => x !== null);
@@ -309,7 +416,12 @@ function buildParsedFile(path: string, sourceFile: ts.SourceFile): ParsedFile {
   const bindings = bySourcePosition(varDecls, sourceFile)
     .map(toBinding)
     .filter((x): x is ParsedBinding => x !== null);
-  return { path, imports, functions, calls, bindings };
+  // Longer literals are skipped entirely here (not truncated) — see
+  // FILE_LITERAL_MAX_CHARS' own comment for why.
+  const literals = bySourcePosition(literalNodes, sourceFile)
+    .filter((n) => n.text.length <= FILE_LITERAL_MAX_CHARS)
+    .map((n) => toLiteral(n, sourceFile));
+  return { path, imports, functions, calls, bindings, literals };
 }
 
 export class TscParserAdapter implements ParserAdapter {

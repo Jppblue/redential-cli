@@ -83,6 +83,32 @@ These hold for the whole spike, unconditionally:
   unreliable within the milestone's timebox, degrade to a coarser signal —
   module co-location plus import edges — and document that degradation
   here rather than letting the milestone run long chasing precision.
+  Outcome: full receiver resolution (see `src/proof-graph/anchors.ts`'s
+  `resolveReceiver`) shipped as originally planned for every recognizer. The
+  one narrow, documented fallback to file-level import co-location is
+  scoped ONLY to supabase/knex DB-writes, because their common calling
+  idiom (`supabase.from('orders').insert(...)`, `knex('users').insert(...)`)
+  invokes the table selector as a function, which collapses to a wildcard
+  chain segment in the parser's syntactic model (`chainOf`'s "*" convention
+  — see `parser-adapter.ts`) and leaves no root name for `resolveReceiver`
+  to resolve. The blanket degradation the timebox above allowed for
+  ("module co-location plus import edges" for everything) was NOT needed.
+
+  ### Attribution rule (H2)
+
+  A structural finding (`src/proof-graph/infer.ts`) is only ever `claimed`
+  when at least one of the anchor-containing files that support it
+  intersects the selected author's own added-lines file set — the same
+  diff-based primitive `scan` already uses for skill detection
+  (`getCommitsAddedLines`, batched the same way as
+  `skill-detect.ts`'s `detectSkills`), never `git blame`. This is
+  deliberately file-level, not function-level, matching the Exclusions
+  section's "No per-function blame": the question asked is "did the user's
+  own diff touch this file," not "which line did they write." An
+  `AMBIGUOUS` finding computes attribution the same way but never claims
+  regardless of the result (see `StructuralFinding.claimed`'s own comment)
+  — attribution only ever upgrades a `direct`/`inferred` finding from
+  unclaimed to claimed, it never changes an ambiguous finding's status.
 - **H3** — programmatic tmpdir fixtures (git repos built in test setup, per
   CLAUDE.md's testing conventions — never committed fixtures with real
   history), including the deliberate false-negative case: Stripe imported

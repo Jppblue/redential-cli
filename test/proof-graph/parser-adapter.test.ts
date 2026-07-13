@@ -149,33 +149,57 @@ describe("TscParserAdapter — functions", () => {
 describe("TscParserAdapter — calls", () => {
   it("resolves a bare call at module top level", () => {
     const file = adapter.parse("a.ts", "f();\n");
-    expect(file.calls).toEqual([{ chain: ["f"], line: 1, enclosingFunction: null }]);
+    expect(file.calls).toEqual([
+      { chain: ["f"], line: 1, enclosingFunction: null, stringArgs: [], argPropertyNames: [] },
+    ]);
   });
 
   it("resolves a nested member chain call", () => {
     const file = adapter.parse("a.ts", "stripe.webhooks.constructEvent(body, sig, secret);\n");
     expect(file.calls).toEqual([
-      { chain: ["stripe", "webhooks", "constructEvent"], line: 1, enclosingFunction: null },
+      {
+        chain: ["stripe", "webhooks", "constructEvent"],
+        line: 1,
+        enclosingFunction: null,
+        stringArgs: [],
+        argPropertyNames: [],
+      },
     ]);
   });
 
   it("resolves computed member access as a '*' segment", () => {
     const file = adapter.parse("a.ts", "obj[key]();\n");
-    expect(file.calls).toEqual([{ chain: ["obj", "*"], line: 1, enclosingFunction: null }]);
+    expect(file.calls).toEqual([
+      { chain: ["obj", "*"], line: 1, enclosingFunction: null, stringArgs: [], argPropertyNames: [] },
+    ]);
   });
 
   it("attributes a call inside a function declaration to that function's name", () => {
     const source = "function handleWebhook() {\n  stripe.webhooks.constructEvent();\n}\n";
     const file = adapter.parse("a.ts", source);
     expect(file.calls).toEqual([
-      { chain: ["stripe", "webhooks", "constructEvent"], line: 2, enclosingFunction: "handleWebhook" },
+      {
+        chain: ["stripe", "webhooks", "constructEvent"],
+        line: 2,
+        enclosingFunction: "handleWebhook",
+        stringArgs: [],
+        argPropertyNames: [],
+      },
     ]);
   });
 
   it("attributes a call inside a method to ClassName.method", () => {
     const source = "class Handler {\n  process() {\n    db.write();\n  }\n}\n";
     const file = adapter.parse("a.ts", source);
-    expect(file.calls).toEqual([{ chain: ["db", "write"], line: 3, enclosingFunction: "Handler.process" }]);
+    expect(file.calls).toEqual([
+      {
+        chain: ["db", "write"],
+        line: 3,
+        enclosingFunction: "Handler.process",
+        stringArgs: [],
+        argPropertyNames: [],
+      },
+    ]);
   });
 
   it("attributes a call inside a nested arrow to the innermost enclosing function", () => {
@@ -183,6 +207,113 @@ describe("TscParserAdapter — calls", () => {
     const file = adapter.parse("a.ts", source);
     const write = file.calls.find((c) => c.chain.join(".") === "db.write");
     expect(write?.enclosingFunction).toBe("<anonymous:L2>");
+  });
+});
+
+describe("TscParserAdapter — call stringArgs", () => {
+  it("captures a plain string-literal argument", () => {
+    const file = adapter.parse("a.ts", 'pool.query("INSERT INTO users VALUES ($1)");\n');
+    expect(file.calls[0].stringArgs).toEqual(["INSERT INTO users VALUES ($1)"]);
+  });
+
+  it("captures a no-substitution template-literal argument", () => {
+    const file = adapter.parse("a.ts", "pool.query(`INSERT INTO users VALUES (1)`);\n");
+    expect(file.calls[0].stringArgs).toEqual(["INSERT INTO users VALUES (1)"]);
+  });
+
+  it("does NOT capture a template literal WITH substitutions (documented limitation)", () => {
+    const file = adapter.parse("a.ts", "pool.query(`INSERT INTO users VALUES (${id})`);\n");
+    expect(file.calls[0].stringArgs).toEqual([]);
+  });
+
+  it("collects multiple string arguments in call order, ignoring non-string arguments", () => {
+    const file = adapter.parse("a.ts", 'f("a", 1, "b", g());\n');
+    expect(file.calls[0].stringArgs).toEqual(["a", "b"]);
+  });
+
+  it("truncates a string argument longer than 200 chars instead of dropping it", () => {
+    const long = "x".repeat(250);
+    const file = adapter.parse("a.ts", `f("${long}");\n`);
+    expect(file.calls[0].stringArgs).toEqual([long.slice(0, 200)]);
+    expect(file.calls[0].stringArgs[0]).toHaveLength(200);
+  });
+
+  it("does not capture a string literal nested inside another expression (e.g. a template with a string sub)", () => {
+    const file = adapter.parse("a.ts", 'f(`${"nested"}`);\n');
+    expect(file.calls[0].stringArgs).toEqual([]);
+  });
+});
+
+describe("TscParserAdapter — call argPropertyNames", () => {
+  it("captures top-level identifier property names of an object-literal argument", () => {
+    const file = adapter.parse("a.ts", 'pool.query("...", { idempotencyKey: key });\n');
+    expect(file.calls[0].argPropertyNames).toEqual(["idempotencyKey"]);
+  });
+
+  it("captures a string-literal property key", () => {
+    const file = adapter.parse("a.ts", 'f({ "idempotency-key": key });\n');
+    expect(file.calls[0].argPropertyNames).toEqual(["idempotency-key"]);
+  });
+
+  it("captures shorthand property names", () => {
+    const file = adapter.parse("a.ts", "f({ idempotencyKey });\n");
+    expect(file.calls[0].argPropertyNames).toEqual(["idempotencyKey"]);
+  });
+
+  it("collects property names across multiple object-literal arguments, skipping non-object arguments", () => {
+    const file = adapter.parse("a.ts", 'f("x", { a: 1 }, 2, { b: 2 });\n');
+    expect(file.calls[0].argPropertyNames).toEqual(["a", "b"]);
+  });
+
+  it("does not capture a computed property key", () => {
+    const file = adapter.parse("a.ts", "f({ [dynamicKey]: 1 });\n");
+    expect(file.calls[0].argPropertyNames).toEqual([]);
+  });
+
+  it("skips a spread property without throwing", () => {
+    const file = adapter.parse("a.ts", "f({ ...rest, idempotencyKey: 1 });\n");
+    expect(file.calls[0].argPropertyNames).toEqual(["idempotencyKey"]);
+  });
+
+  it("does not descend into a NESTED object literal (top-level names only)", () => {
+    const file = adapter.parse("a.ts", "f({ outer: { inner: 1 } });\n");
+    expect(file.calls[0].argPropertyNames).toEqual(["outer"]);
+  });
+});
+
+describe("TscParserAdapter — file-wide literals", () => {
+  it("records a short string literal read via a member/element access, not just call arguments", () => {
+    const file = adapter.parse("a.ts", "const sig = req.headers['stripe-signature'];\n");
+    expect(file.literals).toEqual([{ value: "stripe-signature", line: 1, enclosingFunction: null }]);
+  });
+
+  it("records a literal's enclosing function", () => {
+    const source = "function verify(req) {\n  return req.headers['stripe-signature'];\n}\n";
+    const file = adapter.parse("a.ts", source);
+    expect(file.literals).toEqual([{ value: "stripe-signature", line: 2, enclosingFunction: "verify" }]);
+  });
+
+  it("skips a literal longer than 100 chars entirely (not truncated)", () => {
+    const long = "y".repeat(150);
+    const file = adapter.parse("a.ts", `const s = "${long}";\n`);
+    expect(file.literals).toEqual([]);
+  });
+
+  it("keeps a literal exactly at the 100-char boundary", () => {
+    const exact = "z".repeat(100);
+    const file = adapter.parse("a.ts", `const s = "${exact}";\n`);
+    expect(file.literals).toEqual([{ value: exact, line: 1, enclosingFunction: null }]);
+  });
+
+  it("does not record a literal-shaped string that only appears inside a comment", () => {
+    const file = adapter.parse("a.ts", "// 'stripe-signature'\nconst x = 1;\n");
+    expect(file.literals).toEqual([]);
+  });
+
+  it("collects multiple literals in source order, across a call argument and a plain string", () => {
+    const source = 'f("a");\nconst s = "b";\n';
+    const file = adapter.parse("a.ts", source);
+    expect(file.literals.map((l) => l.value)).toEqual(["a", "b"]);
   });
 });
 
@@ -227,7 +358,9 @@ describe("TscParserAdapter — .tsx parsing", () => {
       { specifier: "react", bindings: [{ local: "React", imported: "default", kind: "default" }] },
     ]);
     expect(file.functions).toEqual([{ name: "Widget", span: { startLine: 2, endLine: 5 }, exported: true }]);
-    expect(file.calls).toEqual([{ chain: ["onClick"], line: 3, enclosingFunction: "Widget" }]);
+    expect(file.calls).toEqual([
+      { chain: ["onClick"], line: 3, enclosingFunction: "Widget", stringArgs: [], argPropertyNames: [] },
+    ]);
   });
 
   it("would misparse the same generic-call-like syntax as a .ts file (sanity check that scriptKind matters)", () => {
@@ -237,7 +370,7 @@ describe("TscParserAdapter — .tsx parsing", () => {
     // that TscParserAdapter picks ScriptKind by file extension.
     const source = "function Widget() {\n  return <div>hi</div>;\n}\n";
     const file = adapter.parse("a.ts", source);
-    expect(file).toEqual({ path: "a.ts", imports: [], functions: [], calls: [], bindings: [] });
+    expect(file).toEqual({ path: "a.ts", imports: [], functions: [], calls: [], bindings: [], literals: [] });
   });
 });
 
@@ -245,12 +378,12 @@ describe("TscParserAdapter — malformed source", () => {
   it("returns an empty ParsedFile for unparseable source, without throwing", () => {
     expect(() => adapter.parse("a.ts", "function foo( { [[[ ===")).not.toThrow();
     const file = adapter.parse("a.ts", "function foo( { [[[ ===");
-    expect(file).toEqual({ path: "a.ts", imports: [], functions: [], calls: [], bindings: [] });
+    expect(file).toEqual({ path: "a.ts", imports: [], functions: [], calls: [], bindings: [], literals: [] });
   });
 
   it("returns an empty ParsedFile for an unclosed block", () => {
     const file = adapter.parse("a.ts", "function foo() {\n  const x = 1;\n");
-    expect(file).toEqual({ path: "a.ts", imports: [], functions: [], calls: [], bindings: [] });
+    expect(file).toEqual({ path: "a.ts", imports: [], functions: [], calls: [], bindings: [], literals: [] });
   });
 
   it("is deterministic: the same malformed input returns an equal (empty) result every time", () => {
