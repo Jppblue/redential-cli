@@ -5,7 +5,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: strict [semver](https://semver.org/) — bundle schema changes
 always bump at least minor; breaking schema changes bump major.
 
-## [Unreleased]
+## [0.4.0] - 2026-07-14
 
 ### Changed
 - **Console UX (phase 2): `scan` becomes a summary-first command; the
