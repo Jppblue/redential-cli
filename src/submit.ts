@@ -1,6 +1,6 @@
 import { NetworkError } from "./errors.js";
 import { isKnownPublicHost, publicHostWarning } from "./public-remote.js";
-import { getJson, headRequest, postRawJson } from "./http-client.js";
+import { getJson, headRequest, postJsonStatusOnly, postRawJson } from "./http-client.js";
 import { IDENTITY_CORROBORATION_HEADER, type IdentityCorroboration } from "./identity-corroboration.js";
 
 const HEAD_TIMEOUT_MS = 5000;
@@ -121,4 +121,45 @@ export async function postBundle(
     throw new NetworkError("Unexpected response from the submit server.");
   }
   return response;
+}
+
+export interface PrivateLabelResult {
+  ok: boolean;
+  /** Present only when `ok` is false — a clear, per-status human message,
+   * never the raw HTTP status alone (see the per-status branches below). */
+  message?: string;
+}
+
+/**
+ * `POST {SITE_URL}/api/cli/private-label` — the SECOND request of a
+ * `submit`, made only after the bundle POST above has already succeeded
+ * (see submit-command.ts and docs/private-label.md). Deliberately never
+ * throws: this function always resolves to a result object, because a
+ * failure here must NEVER be treated as a submit failure, must never be
+ * retried, and must never trigger a second bundle upload — the bundle is
+ * already safely uploaded by the time this runs. The bundle itself carries
+ * none of this: `privateLabel` travels only in this request's body,
+ * alongside the bundle id, never inside the bundle JSON.
+ */
+export async function postPrivateLabel(
+  siteUrl: string,
+  accessToken: string,
+  bundleId: string,
+  privateLabel: string
+): Promise<PrivateLabelResult> {
+  let status: number;
+  try {
+    status = await postJsonStatusOnly(
+      `${siteUrl}/api/cli/private-label`,
+      { bundle_id: bundleId, private_label: privateLabel },
+      { authorization: `Bearer ${accessToken}` }
+    );
+  } catch {
+    return { ok: false, message: "could not reach the server." };
+  }
+  if (status === 204) return { ok: true };
+  if (status === 401) return { ok: false, message: "your session is no longer valid." };
+  if (status === 404) return { ok: false, message: "the uploaded bundle could not be found." };
+  if (status === 422) return { ok: false, message: "the server rejected the label as invalid." };
+  return { ok: false, message: `unexpected response (HTTP ${status}).` };
 }

@@ -154,6 +154,7 @@ Full command reference: [docs/scan.md](docs/scan.md).
 | Other contributors' names or emails | An aggregate count of other contributors |
 | The remote URL | Only the host *kind* (`github`, `gitlab`, …), never the URL |
 | Secrets of any kind | Nothing — a secret-scan runs over the bundle and blocks output on any match |
+| — | Your private label: free text *you* type yourself (never derived from your code), sent alongside — never inside — the bundle, shown before you confirm upload, mandatory, owner-visible only ([docs/private-label.md](docs/private-label.md)) |
 
 Every row on the left is backed by an [executable test](test/privacy/), per
 [docs/privacy-tests.md](docs/privacy-tests.md) — not just a policy
@@ -257,6 +258,7 @@ earned. See [docs/principles.md](docs/principles.md) (principle 6,
 - [docs/privacy-tests.md](docs/privacy-tests.md) — which test proves which rule
 - [docs/scan.md](docs/scan.md) — full `scan` command reference
 - [docs/login-submit.md](docs/login-submit.md) — `login`, `submit`, `logout`
+- [docs/private-label.md](docs/private-label.md) — the mandatory private label: what it is, why it travels outside the bundle
 - [docs/schema.md](docs/schema.md) — every bundle field, explained
 - [docs/signatures.md](docs/signatures.md) — how skill detection works
 - [docs/releasing.md](docs/releasing.md) — how a release is built and verified

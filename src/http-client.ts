@@ -97,6 +97,37 @@ export async function pollJson<T>(url: string, body: unknown): Promise<T> {
 }
 
 /**
+ * POST with a JSON body, returning only the HTTP status — never throws on a
+ * non-2xx response (unlike postJson/postRawJson above), and never attempts
+ * to parse a response body. Built specifically for submit.ts's
+ * `postPrivateLabel`: that endpoint's contract (docs/private-label.md) is a
+ * bare 204 on success and a bare 401/404/422 on the documented failure
+ * modes, with no JSON body in any case — `postJson`'s `res.json()` call on
+ * a genuinely empty 204 body would throw, and its single generic
+ * "failed with status N" error can't tell 401 apart from 422 for the
+ * caller to print a specific message. Still throws NetworkError (host +
+ * "could not reach", no status) on a real network failure — same as every
+ * other function here.
+ */
+export async function postJsonStatusOnly(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {}
+): Promise<number> {
+  const host = new URL(url).host;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+    return res.status;
+  } catch {
+    throw new NetworkError(`Could not reach ${host}.`);
+  }
+}
+
+/**
  * Anonymous HEAD request used only by submit's remote-visibility gate — the
  * request target is the repo's own remote host, never SITE_URL. Returns
  * null (not a thrown error) on any network failure/timeout: an inconclusive

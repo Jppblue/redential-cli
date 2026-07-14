@@ -5,6 +5,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: strict [semver](https://semver.org/) — bundle schema changes
 always bump at least minor; breaking schema changes bump major.
 
+## [Unreleased]
+
+### Added
+- **Mandatory private label on `submit`** — a repo nickname only you ever
+  see, sent as a SECOND request (`POST /api/cli/private-label`) after the
+  bundle upload succeeds, never inside the bundle itself. No schema
+  change: the bundle payload, its bytes, and every existing guardrail test
+  are completely unaffected — this is additive, out-of-band data, not a
+  new bundle field. See [docs/private-label.md](docs/private-label.md) for
+  the full design record (what travels, why outside the bundle, the fixed
+  server contract, and failure semantics).
+  - **BEHAVIOR CHANGE for scripted/non-interactive submits: `--label
+    <text>` is now REQUIRED.** `redential submit --yes --confirm-upload`
+    (or any non-TTY/piped invocation) without `--label` now fails
+    immediately — before any network call, exit 1, nothing uploaded — with
+    a clear error naming the missing flag. Existing automation that calls
+    `submit` non-interactively must add `--label "<some nickname>"` to
+    keep working.
+  - On a real TTY without `--label`, `submit` now asks interactively:
+    `Private label for this repo (only you will ever see it): `. An
+    invalid answer (empty, over 64 characters, containing control
+    characters, or itself secret-shaped) re-asks up to twice; failing all
+    3 attempts aborts the whole submit — exit 1, nothing uploaded, not
+    even the bundle.
+  - The label is validated with the same secret-scan the bundle payload
+    itself is checked against (`assertNoSecrets`) — a secret typed into
+    the label blocks the entire submit, same as a secret found in the
+    bundle.
+  - Printed as part of the same consent surface as the exact JSON payload,
+    right before the final "Upload this bundle? (y/n)" prompt: `Plus your
+    private label: «X» (travels alongside the bundle, never inside it —
+    only you will ever see it)`.
+  - If the label request fails after the bundle already uploaded
+    successfully (network error, or the server returns 401/404/422),
+    `submit` never retries it and never re-uploads the bundle — it prints
+    a warning naming the label (with a note that it can be set later from
+    the web) and still exits 0, since the bundle itself is safely
+    uploaded.
+  - Never persisted to `last-submission.json` or any other local file —
+    see [docs/private-label.md#never-stored-locally](docs/private-label.md#never-stored-locally).
+
 ## [0.4.0] - 2026-07-14
 
 ### Changed

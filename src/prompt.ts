@@ -1,5 +1,6 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { ScanError } from "./errors.js";
+import { validatePrivateLabel } from "./private-label.js";
 
 export interface AuthorCandidate {
   email: string;
@@ -150,6 +151,49 @@ export async function promptContinueLocally(streams: PromptStreams = DEFAULT_STR
     );
     const trimmed = answer.trim().toLowerCase();
     return trimmed === "" || trimmed.startsWith("y");
+  } finally {
+    rl.close();
+  }
+}
+
+const PRIVATE_LABEL_PROMPT_TEXT = "Private label for this repo (only you will ever see it): ";
+/** 1 initial attempt + this many re-asks = 3 total attempts before giving
+ * up — see docs/private-label.md's "mandatory, not optional" section. */
+const PRIVATE_LABEL_MAX_RETRIES = 2;
+
+/**
+ * Mandatory on every `submit` — see docs/private-label.md. Re-asks on any
+ * validation failure (empty, too long, control characters, or a secret
+ * pattern — all via the same `validatePrivateLabel` the `--label` flag
+ * itself is checked against), printing the specific reason so the user
+ * knows what to fix, up to `PRIVATE_LABEL_MAX_RETRIES` times; the final
+ * failed attempt re-throws the validation error itself rather than a
+ * generic one, so the exit message still names the actual problem.
+ */
+export async function promptPrivateLabel(streams: PromptStreams = DEFAULT_STREAMS): Promise<string> {
+  const rl = createInterface(streams);
+  try {
+    for (let attempt = 0; attempt <= PRIVATE_LABEL_MAX_RETRIES; attempt++) {
+      const answer = await questionOrThrowOnClose(
+        rl,
+        PRIVATE_LABEL_PROMPT_TEXT,
+        "Input closed before a private label was entered."
+      );
+      try {
+        return validatePrivateLabel(answer);
+      } catch (err) {
+        if (attempt === PRIVATE_LABEL_MAX_RETRIES) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        // console.error (real stderr), not the injectable `streams.output`
+        // — same choice promptAuthors already makes for its own interstitial
+        // "Which of these..." line, which isn't captured by tests either;
+        // this is guidance text, not part of the single-line prompt itself.
+        console.error(`${message} Please try again.`);
+      }
+    }
+    // Unreachable: the loop above always either returns or throws on its
+    // last iteration — kept only to satisfy the function's return type.
+    throw new ScanError("Private label was not provided.");
   } finally {
     rl.close();
   }

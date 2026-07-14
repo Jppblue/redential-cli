@@ -6,7 +6,7 @@ import { cleanup, commit, createRepo, setRemote } from "./support/fixtures.js";
 import { startMockServer, type MockServer, type RecordedRequest } from "./support/mock-server.js";
 import { saveCredentials } from "../src/credentials.js";
 import { executeSubmitCommand, formatShortUploadSummary } from "../src/submit-command.js";
-import { AuthError, SubmitError } from "../src/errors.js";
+import { AuthError, ScanError, SubmitError } from "../src/errors.js";
 import { bundleContentHash, readLastSubmission } from "../src/submission-record.js";
 import type { Bundle } from "../src/types.js";
 
@@ -186,6 +186,7 @@ describe("executeSubmitCommand", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -223,6 +224,7 @@ describe("executeSubmitCommand", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -251,6 +253,7 @@ describe("executeSubmitCommand", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: false,
+      label: "acme-backend",
       promptConfirmUploadFn: async () => false,
       toolVersion: "0.1.0",
       configDir,
@@ -277,6 +280,7 @@ describe("executeSubmitCommand", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: false,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -307,6 +311,7 @@ describe("executeSubmitCommand", () => {
         author: ["you@example.com"],
         yes: true,
         confirmUpload: true,
+        label: "acme-backend",
         toolVersion: "0.1.0",
         configDir,
         log: () => {},
@@ -336,6 +341,7 @@ describe("executeSubmitCommand", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: () => {},
@@ -365,6 +371,7 @@ describe("executeSubmitCommand", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: () => {},
@@ -392,6 +399,7 @@ describe("executeSubmitCommand", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: false,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: () => {},
@@ -415,9 +423,10 @@ describe("executeSubmitCommand — consent summary", () => {
   // comment. The inviolable guarantee (JSON always printed before the
   // upload prompt, byte-for-byte what gets sent) still holds — only its
   // position within the TTY sequence moved from first to last.
-  it("with isTTY: true, logs contain the short summary, then the consent block, then the payload header, then the bundle JSON last — and the uploaded body still matches the JSON log entry byte-for-byte", async () => {
+  it("with isTTY: true, logs contain the short summary, then the consent block, then the payload header, then the bundle JSON, then the private-label line — and the uploaded body still matches the JSON log entry byte-for-byte", async () => {
     const server = await startMockServer((req) => {
       if (req.url === "/api/cli/bundles") return { status: 200, body: { id: "bundle-tty" } };
+      if (req.url === "/api/cli/private-label") return { status: 204, body: {} };
       return { status: 404, body: {} };
     });
     servers.push(server);
@@ -433,6 +442,7 @@ describe("executeSubmitCommand — consent summary", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -441,19 +451,23 @@ describe("executeSubmitCommand — consent summary", () => {
       isTTY: true,
     });
 
-    // 5 lines: short summary, consent box, payload header, JSON, then the
-    // post-upload "Uploaded. Bundle id: ..." confirmation (unrelated to
-    // this milestone's ordering — logged only after a successful upload).
-    expect(logs).toHaveLength(5);
+    // 6 lines: short summary, consent box, payload header, JSON, the
+    // private-label consent line, then the post-upload "Uploaded. Bundle
+    // id: ..." confirmation (unrelated to this milestone's ordering —
+    // logged only after a successful upload).
+    expect(logs).toHaveLength(6);
     expect(logs[0]).toContain("of private work");
     expect(logs[0]).toContain("1 commit ·");
     expect(logs[0]).toContain("0 capabilities detected");
     expect(logs[1]).toContain("WHAT GETS UPLOADED");
     expect(logs[2]).toBe("Exact payload (byte-for-byte what gets sent):");
     expect(() => JSON.parse(logs[3])).not.toThrow();
-    // The JSON is the last thing logged BEFORE the upload prompt — the
-    // inviolable "printed before upload" guarantee, now positioned last
-    // among the pre-prompt output (logs[4] is the post-upload result line).
+    expect(logs[4]).toContain("Plus your private label:");
+    expect(logs[4]).toContain("acme-backend");
+    // The JSON is printed BEFORE the upload prompt — the inviolable
+    // "printed before upload" guarantee — with only the private-label line
+    // (logs[4], part of the same consent surface) coming after it and
+    // before the prompt; logs[5] is the post-upload result line.
     const bundleLine = logs[3];
 
     const requests = bundleRequests(server);
@@ -487,6 +501,7 @@ describe("executeSubmitCommand — consent summary", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -518,6 +533,7 @@ describe("executeSubmitCommand — consent summary", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -527,6 +543,9 @@ describe("executeSubmitCommand — consent summary", () => {
 
     expect(logs.some((l) => l.includes("WHAT GETS UPLOADED"))).toBe(false);
     expect(logs.some((l) => l.includes("Exact payload"))).toBe(false);
+    // The private-label consent line is TTY-only — a --label was required
+    // and validated (non-TTY, above), but it's never printed here.
+    expect(logs.some((l) => l.includes("private label"))).toBe(false);
     // First log entry is still the raw bundle JSON, as before this feature.
     expect(() => JSON.parse(logs[0])).not.toThrow();
   });
@@ -552,6 +571,7 @@ describe("identity corroboration", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -606,6 +626,7 @@ describe("identity corroboration", () => {
       author: ["you@example.com", "them@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -640,6 +661,7 @@ describe("identity corroboration", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -675,6 +697,7 @@ describe("identity corroboration", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -708,6 +731,7 @@ describe("identity corroboration", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: false,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),
@@ -724,5 +748,229 @@ describe("identity corroboration", () => {
     });
 
     expect(logsAtPromptTime.some((l) => l.includes("1 of 1 claimed identities match"))).toBe(true);
+  });
+});
+
+// Console-UX milestone (2026-07): the mandatory private label — see
+// docs/private-label.md. `labelRequests` mirrors this file's own
+// `bundleRequests` helper above, filtered to the second request instead.
+function labelRequests(server: MockServer): RecordedRequest[] {
+  return server.requests.filter((r) => r.url === "/api/cli/private-label");
+}
+
+describe("executeSubmitCommand — private label", () => {
+  it("sends exactly two requests: the bundle POST (byte-identical to the printed JSON, guardrail untouched) and the private-label POST matching the fixed contract", async () => {
+    const server = await startMockServer((req) => {
+      if (req.url === "/api/cli/bundles") return { status: 200, body: { id: "bundle-label-ok" } };
+      if (req.url === "/api/cli/private-label") return { status: 204, body: {} };
+      return { status: 404, body: {} };
+    });
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "secret-tok", site_url: server.url, obtained_at: "now" }, configDir);
+
+    const logs: string[] = [];
+    const warnings: string[] = [];
+    await executeSubmitCommand({
+      repoPath: dir,
+      author: ["you@example.com"],
+      yes: true,
+      confirmUpload: true,
+      label: "Acme Corp — backend",
+      toolVersion: "0.1.0",
+      configDir,
+      log: (m) => logs.push(m),
+      warn: (m) => warnings.push(m),
+      checkForUpdateFn: noCheckForUpdate,
+    });
+
+    // Exactly two requests to the two endpoints this milestone is about —
+    // the bundle POST and the private-label POST (the identity-corroboration
+    // GET, present on every submit attempt regardless of this feature — see
+    // this file's "identity corroboration" describe block above — is a
+    // third, unrelated request against the same mock server, not asserted
+    // away here since it predates and is orthogonal to the label).
+    expect(bundleRequests(server)).toHaveLength(1);
+    expect(labelRequests(server)).toHaveLength(1);
+    const bundleReq = bundleRequests(server)[0];
+    const labelReq = labelRequests(server)[0];
+    expect(bundleReq).toBeDefined();
+    expect(labelReq).toBeDefined();
+
+    // Guardrail untouched: the bundle POST body is still exactly the
+    // printed JSON, unaffected by the label existing at all.
+    const printedBundleLine = logs.find((l) => l.trim().startsWith("{"));
+    expect(bundleReq.body).toBe(printedBundleLine);
+
+    // The label POST matches the fixed contract exactly:
+    // {"bundle_id": "<id from the bundle POST>", "private_label": "<label>"}.
+    expect(JSON.parse(labelReq.body)).toEqual({
+      bundle_id: "bundle-label-ok",
+      private_label: "Acme Corp — backend",
+    });
+    expect(labelReq.headers.authorization).toBe("Bearer secret-tok");
+
+    // The label POST only ever fires AFTER the bundle POST already
+    // succeeded — never before, never in parallel with an unresolved
+    // bundle upload.
+    const bundleIndex = server.requests.indexOf(bundleReq);
+    const labelIndex = server.requests.indexOf(labelReq);
+    expect(bundleIndex).toBeLessThan(labelIndex);
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("a private-label-POST failure (500) still leaves the bundle uploaded — warns with the label, does not throw (exit 0)", async () => {
+    const server = await startMockServer((req) => {
+      if (req.url === "/api/cli/bundles") return { status: 200, body: { id: "bundle-label-fail" } };
+      if (req.url === "/api/cli/private-label") return { status: 500, body: { error: "boom" } };
+      return { status: 404, body: {} };
+    });
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "secret-tok", site_url: server.url, obtained_at: "now" }, configDir);
+
+    const logs: string[] = [];
+    const warnings: string[] = [];
+    // Resolving without throwing IS the exit-0 behavior at this layer —
+    // cli.ts's `run()` only sets `process.exitCode = 1` on a thrown CLI
+    // error (see src/cli.ts), so a submit that reaches this point without
+    // throwing exits 0 regardless of what warnings were printed along the
+    // way. See docs/private-label.md's "failure semantics" section.
+    await expect(
+      executeSubmitCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        confirmUpload: true,
+        label: "Acme Corp",
+        toolVersion: "0.1.0",
+        configDir,
+        log: (m) => logs.push(m),
+        warn: (m) => warnings.push(m),
+        checkForUpdateFn: noCheckForUpdate,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(bundleRequests(server)).toHaveLength(1);
+    expect(labelRequests(server)).toHaveLength(1);
+    expect(logs.some((l) => l.includes("bundle-label-fail"))).toBe(true);
+    // The warning names the label so the user can set it manually from the
+    // web (the failure-recovery path — see docs/private-label.md) — never
+    // silently swallowed.
+    expect(warnings.some((w) => w.includes("Acme Corp"))).toBe(true);
+    expect(warnings.some((w) => w.toLowerCase().includes("private label"))).toBe(true);
+  });
+
+  it("no --label and non-TTY: throws before ANY network call — zero requests at all, not just zero bundle/label requests", async () => {
+    const server = await startMockServer(() => ({ status: 200, body: { id: "should-not-be-called" } }));
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "t", site_url: server.url, obtained_at: "now" }, configDir);
+
+    const logs: string[] = [];
+    await expect(
+      executeSubmitCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        confirmUpload: true,
+        toolVersion: "0.1.0",
+        configDir,
+        log: (m) => logs.push(m),
+        warn: () => {},
+      })
+    ).rejects.toBeInstanceOf(ScanError);
+
+    // Not just the bundle/label endpoints — this is checked BEFORE
+    // fetchVerifiedEmails too (see submit-command.ts's private-label
+    // resolution comment), so the mock server should have recorded nothing
+    // whatsoever.
+    expect(server.requests).toHaveLength(0);
+    expect(logs).toHaveLength(0);
+  });
+
+  it("an invalid --label (too long) is rejected before any network call, TTY or not", async () => {
+    const server = await startMockServer(() => ({ status: 200, body: { id: "should-not-be-called" } }));
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "t", site_url: server.url, obtained_at: "now" }, configDir);
+
+    await expect(
+      executeSubmitCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        confirmUpload: true,
+        label: "a".repeat(65),
+        toolVersion: "0.1.0",
+        configDir,
+        log: () => {},
+        warn: () => {},
+        isTTY: true,
+      })
+    ).rejects.toThrow(/64 characters or fewer/);
+
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it("TTY, no --label: exhausting the prompt's retries (simulated) throws before any bundle/label request — the corroboration lookup may still have fired, per this file's own precedent for the decline path", async () => {
+    const server = await startMockServer((req) => {
+      if (req.url === "/api/cli/identity/emails") return { status: 404, body: {} };
+      if (req.url === "/api/cli/bundles") return { status: 200, body: { id: "should-not-be-called" } };
+      if (req.url === "/api/cli/private-label") return { status: 204, body: {} };
+      return { status: 404, body: {} };
+    });
+    servers.push(server);
+    process.env.REDENTIAL_SITE_URL = server.url;
+
+    const dir = repoWithOneCommit();
+    const configDir = tempConfigDir();
+    saveCredentials({ access_token: "t", site_url: server.url, obtained_at: "now" }, configDir);
+
+    const logs: string[] = [];
+    // Mirrors what the real prompt.ts's promptPrivateLabel does after 1
+    // initial attempt + 2 retries all come back empty: it throws the
+    // validation error itself rather than a generic one (see
+    // test/prompt.test.ts for that behavior tested directly against real
+    // readline streams).
+    await expect(
+      executeSubmitCommand({
+        repoPath: dir,
+        author: ["you@example.com"],
+        yes: true,
+        confirmUpload: true,
+        toolVersion: "0.1.0",
+        configDir,
+        log: (m) => logs.push(m),
+        warn: () => {},
+        isTTY: true,
+        promptPrivateLabelFn: async () => {
+          throw new ScanError("Private label cannot be empty.");
+        },
+      })
+    ).rejects.toThrow(/cannot be empty/);
+
+    // Zero bundle/label requests either way — the label prompt (and its
+    // failure) happens strictly before the exact-payload print and the
+    // upload prompt, so nothing was ever uploaded.
+    expect(bundleRequests(server)).toHaveLength(0);
+    expect(labelRequests(server)).toHaveLength(0);
+    // The consent box (which precedes the label prompt in the documented
+    // TTY order) did print before the failure.
+    expect(logs.some((l) => l.includes("WHAT GETS UPLOADED"))).toBe(true);
+    expect(logs.some((l) => l.includes("Exact payload"))).toBe(false);
   });
 });

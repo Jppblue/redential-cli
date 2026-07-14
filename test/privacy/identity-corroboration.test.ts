@@ -75,6 +75,7 @@ describe("identity-corroboration never leaks fetched verified emails", () => {
       author: ["you@example.com"],
       yes: true,
       confirmUpload: true,
+      label: "acme-backend",
       toolVersion: "0.1.0",
       configDir,
       log: (m) => logs.push(m),

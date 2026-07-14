@@ -6,7 +6,7 @@ only place the CLI ever does — see [principles.md](principles.md).
 ```bash
 redential login                              # device flow, one time
 redential submit --repo <path>                # interactive: prints the bundle, then asks
-redential submit --author you@x.com --yes --confirm-upload   # non-interactive
+redential submit --author you@x.com --yes --confirm-upload --label "Acme Corp"   # non-interactive
 redential logout                              # delete the stored session
 ```
 
@@ -141,7 +141,14 @@ selection, same authorization-confirmation prompt, same `runScan`. It then:
 
 1. Requires a stored session whose `site_url` matches the current
    `SITE_URL` (`redential login` first, otherwise it refuses).
-2. On a real TTY, output happens in a fixed order, everything before the
+2. Resolves the **private label** — see [docs/private-label.md](private-label.md)
+   for the full design/discussion record. Mandatory on every submit:
+   `--label <text>` if given (validated immediately, before any network
+   call, TTY or not); otherwise, on a real TTY, resolved by the
+   interactive prompt inside step 3's sequence below; otherwise (non-TTY
+   with no `--label`) `submit` refuses immediately, before any network
+   call at all, before this repo's bundle JSON is even printed.
+3. On a real TTY, output happens in a fixed order, everything before the
    upload prompt (console-UX milestone, 2026-07 — see
    [CHANGELOG.md](../CHANGELOG.md)):
    1. A one-line **short summary** — span of history, commit count, and
@@ -150,7 +157,7 @@ selection, same authorization-confirmation prompt, same `runScan`. It then:
       carries `evidence: "structural"`, a structural count is appended,
       e.g. "23 capabilities detected (1 structural)" — visible right at the
       upload edge, not buried inside the box or the JSON.
-   2. Step 3's identity-corroboration line, if the lookup succeeded.
+   2. Step 4's identity-corroboration line, if the lookup succeeded.
    3. A boxed human-readable **consent summary**, titled "WHAT GETS
       UPLOADED" (`formatConsentSummary`, `src/summary.ts` — `submit`'s own
       surface for this; as of the phase-2 console-UX redesign `scan` no
@@ -161,32 +168,50 @@ selection, same authorization-confirmation prompt, same `runScan`. It then:
       fingerprints — every number read off the bundle just printed, never
       hardcoded) and what is NEVER uploaded (source code, file names,
       commit messages, the repo's name, other contributors' identities).
-   4. A header line —
+   4. The **interactive private-label prompt** — `Private label for this
+      repo (only you will ever see it): ` — fires HERE, but only when
+      `--label` wasn't already given in step 2. An invalid answer (empty,
+      too long, control characters, or secret-shaped) re-asks up to 2
+      times; the final failed attempt aborts the whole submit (exit 1,
+      nothing uploaded) rather than asking forever.
+   5. A header line —
       ```
       Exact payload (byte-for-byte what gets sent):
       ```
-      — then the bundle JSON itself, byte for byte what step 6 sends. This
+      — then the bundle JSON itself, byte for byte what step 7 sends. This
       closes the gap `scan`-only builds left open (see
       [privacy-tests.md](privacy-tests.md)): the request body is the
       literal string that was printed, not a re-serialization of the
-      parsed object. The JSON is always the LAST thing printed before the
-      upload prompt — this is an inviolable guarantee: no flag, no
-      default, no code path can skip it or print anything after it before
-      the prompt.
+      parsed object.
+   6. The private-label **consent line** —
+      ```
+      Plus your private label: «X» (travels alongside the bundle, never
+      inside it — only you will ever see it)
+      ```
+      — the label is never part of the bundle JSON above; this is the one
+      place its exact value is shown before consent (principle 4). This is
+      now the LAST thing printed before the upload prompt — the
+      inviolable guarantee from before this feature (the JSON always
+      printed before the prompt) still holds; it's simply no longer the
+      very last line, since the label line — part of the same consent
+      surface — comes right after it.
 
    Piped/redirected `submit` output (scripted use) is unaffected —
    `submit` has no `--json` flag (that's `scan`-only) — the raw bundle
    JSON is still the very first line printed, byte-identical to every
-   prior release; the short summary, consent box, and payload header above
-   are a TTY-only addition. Non-TTY corroboration (step 3) still prints,
-   same as always, right after the JSON.
-3. Fetches identity corroboration (below) and, if it succeeds, prints one
+   prior release; the short summary, consent box, label prompt/line, and
+   payload header above are a TTY-only addition. Non-TTY corroboration
+   (step 4) still prints, same as always, right after the JSON; the
+   private-label consent line is TTY-only (a non-TTY run already required
+   `--label` up front in step 2, so there is no separate interactive value
+   to confirm).
+4. Fetches identity corroboration (below) and, if it succeeds, prints one
    informational line with the result — before asking for upload consent
    in both modes (right after the short summary on a TTY per the sequence
    above; right after the JSON when piped/non-TTY) — see that section for
    exactly what is and isn't sent. Never blocks or delays the next step:
    any failure here simply skips the line.
-4. Asks "Upload this bundle? (y/n)" — a **separate** confirmation from the
+5. Asks "Upload this bundle? (y/n)" — a **separate** confirmation from the
    "Confirm you are authorized to analyze this repository. (y/N)"
    attestation `scan` already requires (note that prompt's default flips to
    N — pressing Enter declines, you must type `y` to proceed). `--yes`
@@ -194,23 +219,34 @@ selection, same authorization-confirmation prompt, same `runScan`. It then:
    `--confirm-upload` separately answers the upload question. Both are
    required flags for a fully non-interactive `submit`, on purpose —
    consenting to be scanned and consenting to upload are different
-   decisions.
-5. Runs the remote-visibility gate (below). If it's confirmed public,
+   decisions; `--label` is a third, separately required flag for that same
+   fully non-interactive case (step 2).
+6. Runs the remote-visibility gate (below). If it's confirmed public,
    `submit` refuses outright — this is `submit`-only behavior; `scan`
    still only ever warns, never blocks, since `scan` has no network access
    to make the real determination.
-6. `POST {SITE_URL}/api/cli/bundles` with `Authorization: Bearer
+7. `POST {SITE_URL}/api/cli/bundles` with `Authorization: Bearer
    <access_token>` and the printed bundle JSON as the body — plus, if step
-   3's corroboration check succeeded, an
+   4's corroboration check succeeded, an
    `X-Redential-Identity-Corroboration` header (below). On success:
    `{id}`. Only the `id` is ever printed back — never the full response
    body, so a change on the server side can't accidentally start echoing
    sensitive content into the terminal.
-7. Records the upload locally (`last-submission.json`, above) — not part
+8. `POST {SITE_URL}/api/cli/private-label` with `{bundle_id: <the id from
+   step 7>, private_label: <the label resolved in step 2>}` — only after
+   step 7 has already succeeded. See
+   [docs/private-label.md](private-label.md) for the full contract and
+   failure semantics: this request is never retried, and a failure here
+   never triggers a second bundle upload — it only prints a warning
+   (naming the label, so it can be set again from the web) and `submit`
+   still exits 0, since the bundle itself is already safely uploaded.
+9. Records the upload locally (`last-submission.json`, above) — not part
    of what's sent, just local bookkeeping for a later `scan`'s next-step
    hint. Unlike the version-check notice below, this is not best-effort:
    a failure here (e.g. an unwritable config dir) surfaces as a real
-   error, since silently swallowing it would leave the CTA wrong.
+   error, since silently swallowing it would leave the CTA wrong. Never
+   includes the private label — see
+   [docs/private-label.md](private-label.md#never-stored-locally).
 
 ## The remote-visibility gate (submit-only)
 
@@ -242,8 +278,8 @@ github.com.
 
 ## Identity corroboration (submit-only)
 
-Between printing the bundle (step 2 above) and asking "Upload this
-bundle?" (step 4), `submit` makes one more authenticated request: `GET
+Between printing the bundle (step 3 above) and asking "Upload this
+bundle?" (step 5), `submit` makes one more authenticated request: `GET
 {SITE_URL}/api/cli/identity/emails` with `Authorization: Bearer
 <access_token>` and a 5s timeout. This is one of the few network calls the
 CLI ever makes, and — like the remote-visibility gate — it only ever runs
@@ -282,11 +318,11 @@ identity is exactly as valid as before, just without an extra
 corroboration marker server-side.
 
 On upload, the two counts travel as a single optional HTTP header on the
-`POST /api/cli/bundles` request (step 6 above):
+`POST /api/cli/bundles` request (step 7 above):
 `X-Redential-Identity-Corroboration: {"corroborated_count": N,
 "total_claimed": M}` (compact JSON). This is the only place they go — they
 are never added to the bundle body, so the bundle stays byte-for-byte
-identical to what was printed in step 2 and there is no schema change.
+identical to what was printed in step 3 and there is no schema change.
 The header also plays no role in the server's duplicate-bundle detection:
 re-submitting an otherwise-unchanged bundle still dedups the same way
 regardless of what the header says.

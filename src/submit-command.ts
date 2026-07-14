@@ -1,15 +1,16 @@
 import { buildBundleInteractively, type BuildBundleOptions } from "./build-bundle.js";
-import { AuthError, SubmitError } from "./errors.js";
+import { ScanError, AuthError, SubmitError } from "./errors.js";
 import { formatConsentSummary } from "./summary.js";
 import { getSiteUrl } from "./config.js";
 import { readCredentials } from "./credentials.js";
 import { getRemoteUrl } from "./git.js";
-import { checkVisibilityGate, fetchVerifiedEmails, postBundle } from "./submit.js";
-import { promptConfirmUpload } from "./prompt.js";
+import { checkVisibilityGate, fetchVerifiedEmails, postBundle, postPrivateLabel } from "./submit.js";
+import { promptConfirmUpload, promptPrivateLabel } from "./prompt.js";
 import { checkForUpdate } from "./version-check.js";
 import { bundleContentHash, saveLastSubmission } from "./submission-record.js";
 import { computeCorroboration, corroborationNotice, type IdentityCorroboration } from "./identity-corroboration.js";
 import { getOrCreateSalt } from "./salt.js";
+import { validatePrivateLabel } from "./private-label.js";
 import type { Bundle } from "./types.js";
 
 export type SubmitCommandOptions = BuildBundleOptions & {
@@ -18,6 +19,23 @@ export type SubmitCommandOptions = BuildBundleOptions & {
   confirmUpload: boolean;
   log?: (message: string) => void;
   promptConfirmUploadFn?: () => Promise<boolean>;
+  // The private nickname for this repo — see docs/private-label.md.
+  // MANDATORY on every submit: required as this flag in a non-TTY/piped
+  // run (executeSubmitCommand throws a clear error before any network call
+  // if it's missing there); optional here on a real TTY, where the user is
+  // prompted interactively instead (see promptPrivateLabelFn below). When
+  // given, it is still run through the exact same validation as a typed
+  // answer (validatePrivateLabel) — an invalid --label is a hard error,
+  // never silently coerced.
+  label?: string;
+  // Injectable for tests; defaults to the real interactive prompt
+  // (prompt.ts's promptPrivateLabel). Only ever called on a real TTY when
+  // `label` above wasn't given.
+  promptPrivateLabelFn?: () => Promise<string>;
+  // Injectable for tests, so a private-label-POST failure/success path
+  // doesn't need a real network call; defaults to the real submit.ts
+  // postPrivateLabel.
+  postPrivateLabelFn?: typeof postPrivateLabel;
   // Injectable for tests, so the visibility gate doesn't need a real
   // network call to github.com to exercise the blocked/unblocked paths.
   probeFn?: Parameters<typeof checkVisibilityGate>[1];
@@ -83,6 +101,25 @@ export function formatShortUploadSummary(bundle: Bundle, plain: boolean | undefi
 }
 
 /**
+ * The consent-surface line for the private label — printed right after the
+ * exact JSON, right before the upload prompt (see the "Output order"
+ * comment below and docs/private-label.md). Deliberately spells out BOTH
+ * halves of the trust claim in one line: it travels (so nothing about it
+ * is a silent addition to the request) and it travels OUTSIDE the bundle
+ * (so its presence here is never mistaken for a bundle field). `«»` is
+ * replaced with plain double quotes in plain mode, matching this file's
+ * existing ASCII-fallback convention for non-structural glyphs (see
+ * formatShortUploadSummary's `dot` above).
+ */
+export function formatPrivateLabelLine(label: string, plain: boolean | undefined): string {
+  const [open, close] = plain ? ['"', '"'] : ["«", "»"];
+  return (
+    `Plus your private label: ${open}${label}${close} (travels alongside the bundle, ` +
+    "never inside it — only you will ever see it)"
+  );
+}
+
+/**
  * `submit`'s actual behavior, independent of commander wiring. Builds the
  * bundle through the exact same path `scan` uses, prints it (byte-for-byte
  * what gets uploaded — see submit.ts's postBundle), then gates on: a
@@ -109,17 +146,48 @@ export async function executeSubmitCommand(opts: SubmitCommandOptions): Promise<
   if (bundle === null) return;
   const bundleJson = JSON.stringify(bundle, null, 2);
 
-  // Output order (console-UX milestone, 2026-07):
+  // Private label resolution (see docs/private-label.md) — MANDATORY,
+  // resolved/validated before any of this function's own network calls
+  // (fetchVerifiedEmails below is the first one). Two of the three cases
+  // resolve right here, before anything is printed:
+  //   - `--label` given: validated immediately (an invalid one is a hard
+  //     error here, TTY or not — no reason to defer a value we already
+  //     have).
+  //   - non-TTY and no `--label`: there is no way to prompt, so this is an
+  //     immediate, clear failure — before any output, before any request.
+  // The third case — a real TTY with no `--label` — is intentionally left
+  // unresolved here (`privateLabel` stays undefined) and is resolved later,
+  // at its documented position in the TTY output sequence below (after the
+  // consent box, before the exact-payload print) — see that block's own
+  // comment for why the position matters.
+  let privateLabel: string | undefined;
+  if (opts.label !== undefined) {
+    privateLabel = validatePrivateLabel(opts.label);
+  } else if (!opts.isTTY) {
+    throw new ScanError(
+      "submit requires --label <text> (a private nickname for this repo, only you will ever see it) " +
+        "when not running in an interactive terminal."
+    );
+  }
+
+  // Output order (console-UX milestone, 2026-07; private-label prompt
+  // added 2026-07 — see docs/private-label.md):
   //   1. one-line short summary (TTY only)
   //   2. identity-corroboration line, when present (both TTY and non-TTY —
   //      see the comment above its computation below; unchanged from
   //      before this milestone)
   //   3. the consent box, "WHAT GETS UPLOADED" (TTY only)
-  //   4. the payload header + the exact JSON (byte-for-byte what gets sent
+  //   4. the private-label prompt, TTY only, only when `--label` wasn't
+  //      given (interactive — not a `log()` line, see the block below)
+  //   5. the payload header + the exact JSON (byte-for-byte what gets sent
   //      — this print IS the guarantee, so nothing may come between the
   //      header and it; ALWAYS printed before the upload prompt, TTY or
   //      not — see the non-TTY branch below for the piped-output case)
-  //   5. the upload prompt, immediately after the JSON
+  //   6. the private-label consent line (TTY only) — part of the consent
+  //      surface: everything that travels is shown before the y/n, and the
+  //      label travels just as much as the bundle does, even though it's a
+  //      separate request (see postPrivateLabel below).
+  //   7. the upload prompt, immediately after the label line
   // Non-TTY/piped stdout keeps its exact pre-existing contract: the raw
   // bundle JSON is the very first thing logged, nothing else surrounding
   // it — `scan`/`submit | jq`-style consumers are unaffected by this
@@ -154,10 +222,23 @@ export async function executeSubmitCommand(opts: SubmitCommandOptions): Promise<
 
   if (opts.isTTY) {
     log(formatConsentSummary(bundle, { plain: opts.plain, command: "submit" }));
+    // Resolved earlier (from `--label`) unless this is a real TTY without
+    // one — in which case this is where the interactive prompt fires, per
+    // the "Output order" comment above: after the consent box, before the
+    // exact-payload print.
+    if (privateLabel === undefined) {
+      privateLabel = await (opts.promptPrivateLabelFn ?? promptPrivateLabel)();
+    }
     log("Exact payload (byte-for-byte what gets sent):");
     log(bundleJson);
+    log(formatPrivateLabelLine(privateLabel, opts.plain));
   }
 
+  // By this point `privateLabel` is always defined: either validated from
+  // `--label` above, resolved by the TTY prompt just above, or this
+  // function has already thrown (non-TTY without `--label`, earlier). The
+  // non-null assertion below documents that invariant rather than
+  // papering over a real gap.
   const confirmedUpload = opts.confirmUpload || (await (opts.promptConfirmUploadFn ?? promptConfirmUpload)());
   if (!confirmedUpload) {
     log("Aborted — nothing was uploaded.");
@@ -175,12 +256,44 @@ export async function executeSubmitCommand(opts: SubmitCommandOptions): Promise<
   const result = await postBundle(siteUrl, credentials.access_token, bundleJson, corroboration);
   log(`Uploaded. Bundle id: ${result.id}`);
 
+  // The SECOND request — the private label, sent only now, only after the
+  // bundle upload above has already fully succeeded (see
+  // docs/private-label.md). `privateLabel` is guaranteed defined here (see
+  // the invariant comment above the upload-confirmation prompt); the `!`
+  // documents that rather than silently trusting an `undefined` through.
+  // Deliberately never retried and never followed by a second bundle
+  // upload on failure — postPrivateLabel itself never throws, so a failure
+  // here surfaces only as a warning, with the bundle upload already safely
+  // recorded as a success (see this function's own exit-code note in
+  // docs/private-label.md: the overall `submit` still succeeds).
+  const labelResult = await (opts.postPrivateLabelFn ?? postPrivateLabel)(
+    siteUrl,
+    credentials.access_token,
+    result.id,
+    privateLabel!
+  );
+  if (!labelResult.ok) {
+    warn(
+      `Warning: your private label could not be saved (${labelResult.message}) Your bundle uploaded ` +
+        `successfully. Your label was: "${privateLabel}" — you can set it later from the web.`
+    );
+  }
+
   // Local-only bookkeeping so a future `scan`'s summary can tell "already
   // uploaded, nothing new to submit" from "not submitted yet" —
   // see submission-record.ts. Never sent anywhere; best-effort in spirit
   // but not wrapped in try/catch like checkForUpdate below, since a
   // failure here (e.g. an unwritable config dir) would be a real local
   // problem worth surfacing, not a network blip to swallow.
+  // Deliberately does NOT include `privateLabel`: this record already
+  // lives outside the restricted-permissions/secret-file category
+  // (submission-record.ts writes it without `mode: 0600`, unlike
+  // credentials.json), on the grounds that it's just a hash of content the
+  // user already reviewed. A private label is a different kind of local
+  // data — a free-text nickname the user may reuse across employers/repos
+  // — so accumulating it into this unprotected file would create exactly
+  // the kind of local-disk sensitive-data footprint this record was never
+  // meant to have. It is never read back or needed locally for anything.
   saveLastSubmission(
     {
       site_url: siteUrl,

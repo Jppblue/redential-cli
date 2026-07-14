@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Readable, Writable } from "node:stream";
 import {
   promptAuthors,
   promptConfirmAttestation,
   promptConfirmUpload,
   promptContinueLocally,
+  promptPrivateLabel,
   promptUseGitIdentity,
 } from "../src/prompt.js";
 import { ScanError } from "../src/scan.js";
@@ -23,6 +24,33 @@ function lineInput(line: string): Readable {
   input.push(`${line}\n`);
   input.push(null);
   return input;
+}
+
+// Feeds several lines in sequence (as if the user answered a re-asked
+// prompt multiple times) — used by promptPrivateLabel's re-ask tests
+// below. Unlike `lineInput`, this can't push every line eagerly up front:
+// node's readline parses every already-buffered line in one pass and
+// silently drops any line that arrives while no `rl.question()` callback
+// is currently pending (readline re-emits it as a bare 'line' event
+// instead, which nothing here listens for) — so pushing all 3 lines
+// synchronously loses lines 2 and 3 before the second/third question() is
+// even called. Delivering each line via `setImmediate` inside `_read()`
+// instead lets each answer be consumed (and the next `question()` call
+// issued) before the following line arrives. Never signals EOF (no
+// `push(null)`) — none of the tests using this need it, since
+// promptPrivateLabel either returns after a valid answer or throws
+// synchronously after its final failed attempt, in both cases without
+// calling `rl.question()` again.
+function multiLineInput(...lines: string[]): Readable {
+  let i = 0;
+  return new Readable({
+    read() {
+      if (i >= lines.length) return;
+      const line = lines[i];
+      i++;
+      setImmediate(() => this.push(`${line}\n`));
+    },
+  });
 }
 
 function sinkOutput(): Writable {
@@ -78,6 +106,65 @@ describe("prompt EOF handling", () => {
     await expect(
       promptContinueLocally({ input: endedInput(), output: sinkOutput() })
     ).rejects.toBeInstanceOf(ScanError);
+  });
+
+  it("promptPrivateLabel rejects when input closes before an answer", async () => {
+    await expect(
+      promptPrivateLabel({ input: endedInput(), output: sinkOutput() })
+    ).rejects.toBeInstanceOf(ScanError);
+  });
+});
+
+describe("promptPrivateLabel — mandatory, re-asks up to 2 times on an invalid answer", () => {
+  const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  afterEach(() => {
+    consoleErrorSpy.mockClear();
+  });
+
+  it("prints exactly 'Private label for this repo (only you will ever see it): '", async () => {
+    const out = captureOutput();
+    await promptPrivateLabel({ input: lineInput("Acme Corp"), output: out.stream });
+    expect(out.text()).toBe("Private label for this repo (only you will ever see it): ");
+  });
+
+  it("accepts a valid answer on the first attempt, trimmed", async () => {
+    const result = await promptPrivateLabel({ input: lineInput("  Acme Corp  "), output: sinkOutput() });
+    expect(result).toBe("Acme Corp");
+  });
+
+  it("re-asks once on an empty answer, then accepts a valid second answer", async () => {
+    const result = await promptPrivateLabel({
+      input: multiLineInput("", "Acme Corp"),
+      output: sinkOutput(),
+    });
+    expect(result).toBe("Acme Corp");
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain("cannot be empty");
+  });
+
+  it("re-asks on 2 consecutive invalid answers, then accepts a valid 3rd answer (the max)", async () => {
+    const result = await promptPrivateLabel({
+      input: multiLineInput("", "", "Acme Corp"),
+      output: sinkOutput(),
+    });
+    expect(result).toBe("Acme Corp");
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("after 3 empty answers (1 initial + 2 retries), throws the validation error rather than asking again", async () => {
+    await expect(
+      promptPrivateLabel({ input: multiLineInput("", "", ""), output: sinkOutput() })
+    ).rejects.toThrow(/cannot be empty/);
+  });
+
+  it("also re-asks on a non-empty but otherwise invalid answer (e.g. too long), same as an empty one", async () => {
+    const tooLong = "a".repeat(65);
+    const result = await promptPrivateLabel({
+      input: multiLineInput(tooLong, "Acme Corp"),
+      output: sinkOutput(),
+    });
+    expect(result).toBe("Acme Corp");
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain("64 characters or fewer");
   });
 });
 

@@ -144,13 +144,19 @@ program
     false
   )
   .option("--confirm-upload", "confirm the upload itself non-interactively (separate from --yes)", false)
-  .action(async (options: { repo: string; author: string[]; yes: boolean; confirmUpload: boolean }) => {
+  .option(
+    "--label <text>",
+    "a private nickname for this repo, visible only to you (see docs/private-label.md); " +
+      "required when not running in an interactive terminal"
+  )
+  .action(async (options: { repo: string; author: string[]; yes: boolean; confirmUpload: boolean; label?: string }) => {
     await run(() =>
       executeSubmitCommand({
         repoPath: resolve(options.repo),
         author: options.author,
         yes: options.yes,
         confirmUpload: options.confirmUpload,
+        label: options.label,
         toolVersion: getToolVersion(),
         isTTY: process.stdout.isTTY === true,
         plain: shouldUsePlainOutput(process.platform, process.env),
