@@ -215,6 +215,164 @@ describe("formatSummary", () => {
       expect(text).toMatch(/^[\x20-\x7e\n]*$/);
     });
   });
+
+  describe("structural evidence (proof graph)", () => {
+    it("renders a DIRECT badge on a structural/direct skill and the STRUCTURAL EVIDENCE section with a matching explain pointer", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          {
+            slug: "payments/payment-webhook-flow",
+            commit_count: 5,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "direct",
+          },
+          { slug: "auth/clerk", commit_count: 3, first_seen: "2024-01-01", last_seen: "2024-01-01" },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      expect(text).toContain("⚡ structural · DIRECT");
+      expect(text).toContain("STRUCTURAL EVIDENCE (proof graph)");
+      expect(text).toContain("payments/payment-webhook-flow");
+      expect(text).toContain("verified connected flow");
+      expect(text).toContain("→ full local evidence: redential explain payments/payment-webhook-flow");
+      // The ordinary import-tier skill gets no badge at all.
+      const clerkLine = text.split("\n").find((l) => l.includes("auth/clerk"));
+      expect(clerkLine).toBeDefined();
+      expect(clerkLine).not.toContain("structural");
+    });
+
+    it("renders an INFERRED badge and the corresponding wording for a structural/inferred skill", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          {
+            slug: "payments/payment-webhook-flow",
+            commit_count: 5,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "inferred",
+          },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      expect(text).toContain("⚡ structural · INFERRED");
+      expect(text).toContain("connected flow across files");
+      expect(text).not.toContain("verified connected flow");
+    });
+
+    it("with more than 2 structural skills, shows one pointer line using only the first structural slug", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          {
+            slug: "payments/payment-webhook-flow",
+            commit_count: 9,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "direct",
+          },
+          {
+            slug: "ai/anthropic-api",
+            commit_count: 8,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "inferred",
+          },
+          {
+            slug: "auth/clerk",
+            commit_count: 7,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "direct",
+          },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      const pointerLines = text.split("\n").filter((l) => l.includes("full local evidence"));
+      expect(pointerLines).toHaveLength(1);
+      expect(pointerLines[0]).toContain("redential explain payments/payment-webhook-flow");
+    });
+
+    it("with exactly 2 structural skills, shows one pointer line per slug", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          {
+            slug: "payments/payment-webhook-flow",
+            commit_count: 9,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "direct",
+          },
+          {
+            slug: "ai/anthropic-api",
+            commit_count: 8,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "inferred",
+          },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      const pointerLines = text.split("\n").filter((l) => l.includes("full local evidence"));
+      expect(pointerLines).toHaveLength(2);
+      expect(pointerLines[0]).toContain("redential explain payments/payment-webhook-flow");
+      expect(pointerLines[1]).toContain("redential explain ai/anthropic-api");
+    });
+
+    it("no structural entries: renders neither the badge nor the STRUCTURAL EVIDENCE section (regression — byte-identical to pre-feature output)", () => {
+      const text = stripAnsi(formatSummary(baseBundle()));
+      expect(text).not.toContain("structural");
+      expect(text).not.toContain("STRUCTURAL EVIDENCE");
+      expect(text).not.toContain("full local evidence");
+    });
+
+    it("plain mode uses an ASCII substitute badge (no ⚡/· glyphs) and stays pure printable ASCII", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          {
+            slug: "payments/payment-webhook-flow",
+            commit_count: 5,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "direct",
+          },
+        ],
+      });
+      const text = formatSummary(bundle, { plain: true });
+      // eslint-disable-next-line no-control-regex
+      expect(text).toMatch(/^[\x20-\x7e\n]*$/);
+      expect(text).toContain("* structural - DIRECT");
+      expect(text).toContain("STRUCTURAL EVIDENCE");
+    });
+
+    it("column alignment: the padded slug/commit-count columns are unaffected by the trailing badge", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          {
+            slug: "payments/payment-webhook-flow",
+            commit_count: 5,
+            first_seen: "2024-01-01",
+            last_seen: "2024-06-01",
+            evidence: "structural",
+            confidence: "direct",
+          },
+          { slug: "ai/anthropic-api", commit_count: 3, first_seen: "2024-01-01", last_seen: "2024-01-01" },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      // Both slugs are padded to the same label width before the commit
+      // count column starts, regardless of which entries carry a badge.
+      expect(text).toContain("payments/payment-webhook-flow  ");
+      expect(text).toContain("ai/anthropic-api               ");
+    });
+  });
 });
 
 describe("formatConsentSummary", () => {

@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: strict [semver](https://semver.org/) — bundle schema changes
 always bump at least minor; breaking schema changes bump major.
 
+## [Unreleased]
+
+### Changed
+- The `scan` TTY summary ("YOUR PRIVATE REPO, WRAPPED") now highlights
+  structural evidence: skills detected via the proof graph get a badge in
+  SKILLS DETECTED (`⚡ structural · DIRECT`/`INFERRED`) and a new
+  STRUCTURAL EVIDENCE section pointing to `redential explain <slug>`.
+  Display-only — no new data collection, no change to the bundle payload.
+
 ## [0.3.0] - 2026-07-13
 
 ### Added

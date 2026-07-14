@@ -1,4 +1,4 @@
-import type { Bundle } from "./types.js";
+import type { Bundle, DetectedSkill } from "./types.js";
 
 /**
  * Renders a human-facing "wrapped" summary of an already-computed bundle for
@@ -35,6 +35,10 @@ interface Theme {
     boxBR: string;
     divider: string;
     arrow: string;
+    /** Marker glyph for the structural-evidence badge in SKILLS DETECTED. */
+    badge: string;
+    /** Inline separator used inside that same badge (not the box divider). */
+    dot: string;
   };
 }
 
@@ -64,6 +68,10 @@ const RICH_THEME: Theme = {
     boxBR: "╝",
     divider: "─",
     arrow: "→",
+    // Same non-ASCII-terminal assumption as the box-drawing/block chars
+    // above (▃▄█░ etc.) — no new risk class introduced by adding these.
+    badge: "⚡",
+    dot: "·",
   },
 };
 
@@ -92,6 +100,9 @@ const PLAIN_THEME: Theme = {
     boxBR: "+",
     divider: "-",
     arrow: "->",
+    // Pure-ASCII substitutes so plain mode's "no Unicode" guarantee holds.
+    badge: "*",
+    dot: "-",
   },
 };
 
@@ -196,6 +207,23 @@ function shareSection(
   });
 }
 
+// Structural findings (proof graph, bundle schema 1.2.0+, `evidence:
+// "structural"`) get a visible badge appended after the commit count in
+// SKILLS DETECTED — appended AFTER the padded label/count columns, so
+// existing column alignment (computed from `labelWidth` alone) is
+// untouched. RICH_THEME's lightning glyph mirrors the non-ASCII
+// box-drawing/block characters this file already emits (▃▄█░ etc.) — same
+// terminal-capability assumption, no new risk class; PLAIN_THEME uses a
+// pure-ASCII substitute (see its `chars.badge`/`chars.dot`) so plain mode's
+// "no Unicode" guarantee (see summary.test.ts) still holds. Skills without
+// `evidence: "structural"` (the vast majority — ordinary import-tier
+// matches) render no badge at all, identical to before this feature.
+function evidenceBadge(skill: DetectedSkill, theme: Theme): string {
+  if (skill.evidence !== "structural") return "";
+  const confidenceLabel = skill.confidence === "inferred" ? "INFERRED" : "DIRECT";
+  return `  ${theme.colors.YELLOW}${theme.chars.badge} structural ${theme.chars.dot} ${confidenceLabel}${theme.colors.RESET}`;
+}
+
 function skillsSection(bundle: Bundle, theme: Theme): string[] {
   const skills = [...bundle.detected_skills].sort((a, b) => b.commit_count - a.commit_count);
   if (skills.length === 0) {
@@ -211,10 +239,39 @@ function skillsSection(bundle: Bundle, theme: Theme): string[] {
     (s) =>
       `  ${s.slug.padEnd(labelWidth)}  ${theme.colors.GREEN}${String(s.commit_count).padStart(4)} commits${
         theme.colors.RESET
-      }`
+      }${evidenceBadge(s, theme)}`
   );
   if (skills.length > shown.length) {
     lines.push(`  ${theme.colors.DIM}+${skills.length - shown.length} more${theme.colors.RESET}`);
+  }
+  return lines;
+}
+
+// STRUCTURAL EVIDENCE (proof graph) section — rendered only when at least
+// one detected skill carries `evidence: "structural"`. Per principle 4
+// (docs/principles.md — "the summary mirrors the payload": what `scan`
+// prints is byte-for-byte what `submit` sends), this section shows ONLY
+// data already present in the bundle payload itself: the slug, and a fixed
+// phrase derived from `confidence`. It never shows paths, function/variable
+// names, node/edge counts, or any other proof-graph internal — none of
+// that ever enters the bundle in the first place (see types.ts's
+// `DetectedSkill` comment), and this renderer must not imply otherwise.
+// That richer, purely-local detail lives behind `redential explain <slug>`,
+// which this section points to instead of rendering it inline.
+function structuralEvidenceSection(bundle: Bundle, theme: Theme): string[] {
+  const structural = bundle.detected_skills.filter((s) => s.evidence === "structural");
+  if (structural.length === 0) return [];
+  const lines: string[] = [heading("STRUCTURAL EVIDENCE (proof graph)", theme)];
+  for (const s of structural) {
+    const phrase = s.confidence === "inferred" ? "connected flow across files" : "verified connected flow";
+    lines.push(`  ${s.slug}  ${theme.colors.CYAN}${phrase}${theme.colors.RESET}`);
+  }
+  // At most 2 structural entries: one pointer line per slug (still cheap to
+  // scan). More than 2: a single pointer line using the first slug only,
+  // to avoid the section growing unbounded with the skill count.
+  const pointerSlugs = structural.length <= 2 ? structural.map((s) => s.slug) : [structural[0].slug];
+  for (const slug of pointerSlugs) {
+    lines.push(`  ${theme.chars.arrow} full local evidence: redential explain ${slug}`);
   }
   return lines;
 }
@@ -326,6 +383,12 @@ export function formatSummary(bundle: Bundle, opts: FormatSummaryOptions = {}): 
   lines.push(heading("SKILLS DETECTED", theme));
   lines.push(...skillsSection(bundle, theme));
   lines.push("");
+
+  const structuralLines = structuralEvidenceSection(bundle, theme);
+  if (structuralLines.length > 0) {
+    lines.push(...structuralLines);
+    lines.push("");
+  }
 
   lines.push(
     `  ${colors.BOLD}Ownership${colors.RESET}       ${colors.YELLOW}${pct(
