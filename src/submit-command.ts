@@ -67,12 +67,17 @@ function humanizeSpanDays(days: number): string {
 export function formatShortUploadSummary(bundle: Bundle, plain: boolean | undefined): string {
   const span = humanizeSpanDays(bundle.commits.span_days);
   const commitCount = bundle.commits.user_total.toLocaleString("en-US");
+  // "commit" for exactly 1, "commits" otherwise — mirrors summary.ts's own
+  // `commitWord` (duplicated rather than imported, same rationale as
+  // `humanizeSpanDays` above: this file is out of scope for the console-UX
+  // phases that have touched summary.ts so far).
+  const commitWord = bundle.commits.user_total === 1 ? "commit" : "commits";
   const capabilityCount = bundle.detected_skills.length;
   const structuralCount = bundle.detected_skills.filter((s) => s.evidence === "structural").length;
   const structuralSuffix = structuralCount > 0 ? ` (${structuralCount} structural)` : "";
   const dot = plain ? "-" : "·"; // middle dot; ASCII fallback for PLAIN_THEME parity
   return (
-    `${span} of private work ${dot} ${commitCount} commits ${dot} ` +
+    `${span} of private work ${dot} ${commitCount} ${commitWord} ${dot} ` +
     `${capabilityCount} capabilities detected${structuralSuffix}`
   );
 }

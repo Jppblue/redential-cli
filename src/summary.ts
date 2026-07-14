@@ -206,6 +206,14 @@ function pct(fraction: number): string {
   return `${Math.round(fraction * 100)}%`;
 }
 
+/** "commit" for exactly 1, "commits" otherwise — every rendered "<n>
+ * commit(s)" phrase in this file goes through this so singular/plural stays
+ * consistent (capability lines, the header's authored-commit count, and
+ * formatConsentSummary's own commit-count line). */
+function commitWord(n: number): string {
+  return n === 1 ? "commit" : "commits";
+}
+
 function bar(fraction: number, width: number, theme: Theme): string {
   const clamped = Math.max(0, Math.min(1, fraction));
   const filled = Math.round(clamped * width);
@@ -385,23 +393,34 @@ function capabilitiesSection(bundle: Bundle, theme: Theme): string[] {
     }))
     .sort((a, b) => b.totalCommits - a.totalCommits);
 
-  // One shared label width so the commit-count column lines up between the
-  // 2-space-indented structural rows and the 4-space-indented group rows —
-  // group rows get 2 fewer padding columns to compensate for their extra
-  // indent.
-  const allLabels = [
-    ...structural.map((s) => skillLabel(s.slug)),
-    ...groups.flatMap((g) => g.skills.slice(0, MAX_GROUP_ENTRIES).map((s) => skillLabel(s.slug))),
-  ];
-  const labelWidth = Math.max(...allLabels.map((l) => l.length), 4);
+  // One shared label width — computed GLOBALLY across every rendered
+  // capability line (structural rows AND every group's shown entries), same
+  // approach TOP LANGUAGES/TOP CATEGORIES already use for their own columns
+  // — so the commit-count column lines up across the WHOLE capabilities
+  // section, not just within a single group. Structural rows are indented 2
+  // spaces, group rows 4 (2 extra) — computing `labelWidth` from raw label
+  // length alone (mixing both indent levels into one flat max) breaks
+  // alignment the moment the single longest label anywhere happens to sit
+  // in a group row: `labelWidth - 2` would then be too narrow to actually
+  // fit it, so THAT row's own count column silently shifts right of every
+  // other row's. To avoid that, the two indent levels get their own max
+  // label length first, and the shared width is derived so BOTH pad targets
+  // stay large enough for their own widest label — group rows' 2-space
+  // extra indent is folded in by comparing against `maxGroupLabel + 2`
+  // rather than `maxGroupLabel` directly.
+  const structuralLabels = structural.map((s) => skillLabel(s.slug));
+  const groupLabels = groups.flatMap((g) => g.skills.slice(0, MAX_GROUP_ENTRIES).map((s) => skillLabel(s.slug)));
+  const maxStructuralLabel = Math.max(0, ...structuralLabels.map((l) => l.length));
+  const maxGroupLabel = Math.max(0, ...groupLabels.map((l) => l.length));
+  const labelWidth = Math.max(maxStructuralLabel, maxGroupLabel + 2, 4);
 
   const lines: string[] = [];
   for (const s of structural) {
     const label = skillLabel(s.slug);
     lines.push(
-      `  ${label.padEnd(labelWidth)}  ${colors.GREEN}${String(s.commit_count).padStart(4)} commits${
-        colors.RESET
-      }${evidenceBadge(s, theme)}`
+      `  ${label.padEnd(labelWidth)}  ${colors.GREEN}${String(s.commit_count).padStart(4)} ${commitWord(
+        s.commit_count
+      )}${colors.RESET}${evidenceBadge(s, theme)}`
     );
   }
   if (structural.length > 0 && groups.length > 0) lines.push("");
@@ -414,7 +433,7 @@ function capabilitiesSection(bundle: Bundle, theme: Theme): string[] {
       lines.push(
         `    ${label.padEnd(Math.max(0, labelWidth - 2))}  ${colors.GREEN}${String(s.commit_count).padStart(
           4
-        )} commits${colors.RESET}`
+        )} ${commitWord(s.commit_count)}${colors.RESET}`
       );
     }
     if (group.skills.length > shown.length) {
@@ -472,9 +491,9 @@ export function formatSummary(bundle: Bundle, opts: FormatSummaryOptions = {}): 
   const commitCount = bundle.commits.user_total.toLocaleString("en-US");
   const windowSuffix = opts.sinceLabel ? ` ${colors.DIM}(${opts.sinceLabel})${colors.RESET}` : "";
   lines.push(
-    `  ${colors.BOLD}${humanizeSpan(bundle.commits.span_days)} ${chars.dot} ${commitCount} authored commits ${
-      chars.dot
-    } ${pct(bundle.ownership.user_commit_ratio)} ownership${colors.RESET}${windowSuffix}`
+    `  ${colors.BOLD}${humanizeSpan(bundle.commits.span_days)} ${chars.dot} ${commitCount} authored ${commitWord(
+      bundle.commits.user_total
+    )} ${chars.dot} ${pct(bundle.ownership.user_commit_ratio)} ownership${colors.RESET}${windowSuffix}`
   );
   if (opts.isShallow) {
     lines.push(
@@ -647,7 +666,7 @@ export function formatConsentSummary(bundle: Bundle, opts: FormatConsentSummaryO
     }${" ".repeat(WIDTH - titlePad - title.length)}${colors.CYAN}${chars.boxV}${colors.RESET}`
   );
   lines.push(boxRow(""));
-  lines.push(boxRow(` ${bullet} ${commitCount} commits spanning ${span}`));
+  lines.push(boxRow(` ${bullet} ${commitCount} ${commitWord(bundle.commits.user_total)} spanning ${span}`));
   lines.push(boxRow(` ${skillsLine}`));
   lines.push(boxRow(` ${bullet} time patterns, languages and categories as aggregates`));
   lines.push(boxRow(` ${bullet} salted fingerprints (repo + identity, not reversible)`));

@@ -446,7 +446,7 @@ describe("executeSubmitCommand — consent summary", () => {
     // this milestone's ordering — logged only after a successful upload).
     expect(logs).toHaveLength(5);
     expect(logs[0]).toContain("of private work");
-    expect(logs[0]).toContain("1 commits");
+    expect(logs[0]).toContain("1 commit ·");
     expect(logs[0]).toContain("0 capabilities detected");
     expect(logs[1]).toContain("WHAT GETS UPLOADED");
     expect(logs[2]).toBe("Exact payload (byte-for-byte what gets sent):");

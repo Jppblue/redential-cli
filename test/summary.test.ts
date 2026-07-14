@@ -467,12 +467,124 @@ describe("formatSummary", () => {
       expect(text).toMatch(/Anthropic API\s{2,}3 commits/);
     });
   });
+
+  // Regression coverage for two cosmetic bugs found in a real-world scan
+  // summary: (1) capability/header lines always said "N commits" even for
+  // N === 1 ("1 commits"); (2) the commit-count column drifted out of line
+  // whenever one capability label was longer than others, because the old
+  // label-width computation didn't correctly account for the extra 2-space
+  // indent on grouped rows relative to structural rows.
+  describe("commit-count pluralization and column alignment (bugfix)", () => {
+    it("pluralizes capability commit counts: singular '1 commit', plural 'N commits'", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          { slug: "auth/clerk", commit_count: 1, first_seen: "2024-01-01", last_seen: "2024-01-01" },
+          { slug: "ai/anthropic-api", commit_count: 2, first_seen: "2024-01-01", last_seen: "2024-01-01" },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      expect(text).toContain("1 commit");
+      expect(text).not.toContain("1 commits");
+      expect(text).toContain("2 commits");
+    });
+
+    it("pluralizes a structural-evidence capability's commit count too: singular '1 commit'", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          {
+            slug: "payments/payment-webhook-flow",
+            commit_count: 1,
+            first_seen: "2024-01-01",
+            last_seen: "2024-01-01",
+            evidence: "structural",
+            confidence: "direct",
+          },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      expect(text).toContain("1 commit");
+      expect(text).not.toContain("1 commits");
+    });
+
+    it("pluralizes the header's authored-commit count: singular '1 authored commit', never '1 authored commits'", () => {
+      const bundle = baseBundle({
+        commits: {
+          user_total: 1,
+          first_at: "2026-07-09T00:00:00.000Z",
+          last_at: "2026-07-09T00:00:00.000Z",
+          span_days: 0,
+          hour_histogram: new Array(24).fill(0),
+          weekday_histogram: [0, 1, 0, 0, 0, 0, 0],
+        },
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      expect(text).toContain("1 authored commit ");
+      expect(text).not.toContain("1 authored commits");
+    });
+
+    it("keeps the plural header phrasing for N > 1 (no regression)", () => {
+      const text = stripAnsi(formatSummary(baseBundle()));
+      expect(text).toContain("1,847 authored commits");
+    });
+
+    it("aligns commit-count columns GLOBALLY across different capability groups — a long label in one group must not push its own row's count column out of line with a short label in a different group", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          // Real taxonomy.json labels: a long one ("frontend" group) and a
+          // short one ("auth" group) — each the sole entry in its own group,
+          // so a per-group (rather than global) width computation would
+          // wrongly align them independently instead of sharing one column.
+          { slug: "frontend/tca", commit_count: 12, first_seen: "2024-01-01", last_seen: "2024-01-01" },
+          { slug: "auth/clerk", commit_count: 3, first_seen: "2024-01-01", last_seen: "2024-01-01" },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      const lines = text.split("\n");
+      const longLine = lines.find((l) => l.includes("The Composable Architecture (Swift)"));
+      const shortLine = lines.find((l) => l.includes("Clerk"));
+      expect(longLine).toBeDefined();
+      expect(shortLine).toBeDefined();
+      expect(longLine!.indexOf("commit")).toBe(shortLine!.indexOf("commit"));
+    });
+
+    it("aligns commit-count columns WITHIN a group when one label is much longer than another (real-world repro: 'Supabase (Postgres client)' vs 'Prisma ORM', both under Databases)", () => {
+      const bundle = baseBundle({
+        detected_skills: [
+          { slug: "db/supabase", commit_count: 104, first_seen: "2024-01-01", last_seen: "2024-01-01" },
+          { slug: "db/prisma", commit_count: 3, first_seen: "2024-01-01", last_seen: "2024-01-01" },
+        ],
+      });
+      const text = stripAnsi(formatSummary(bundle));
+      const lines = text.split("\n");
+      const supabaseLine = lines.find((l) => l.includes("Supabase (Postgres client)"));
+      const prismaLine = lines.find((l) => l.includes("Prisma ORM"));
+      expect(supabaseLine).toBeDefined();
+      expect(prismaLine).toBeDefined();
+      expect(supabaseLine!.indexOf("commit")).toBe(prismaLine!.indexOf("commit"));
+    });
+  });
 });
 
 describe("formatConsentSummary", () => {
   it("derives commit count and humanized span from the bundle", () => {
     const text = stripAnsi(formatConsentSummary(baseBundle(), { command: "submit" }));
     expect(text).toContain("1,847 commits spanning 2 years");
+  });
+
+  it("pluralizes the commit-count line: singular '1 commit spanning', never '1 commits spanning'", () => {
+    const bundle = baseBundle({
+      commits: {
+        user_total: 1,
+        first_at: "2026-07-09T00:00:00.000Z",
+        last_at: "2026-07-09T00:00:00.000Z",
+        span_days: 0,
+        hour_histogram: new Array(24).fill(0),
+        weekday_histogram: [0, 1, 0, 0, 0, 0, 0],
+      },
+    });
+    const text = stripAnsi(formatConsentSummary(bundle, { command: "submit" }));
+    expect(text).toContain("1 commit spanning");
+    expect(text).not.toContain("1 commits spanning");
   });
 
   it("derives detected-skill count and top-3 HUMAN LABELS (sorted by commit_count desc) from the bundle, never raw slugs", () => {
