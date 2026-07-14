@@ -42,21 +42,31 @@ bump, (3) an entry in docs/schema.md and CHANGELOG.md.
 ## Conventions
 
 - Strict TypeScript. Node >= 20. ESM.
-- Code comments and public docs in ENGLISH (international repo).
+- ALL code comments, docstrings, variable/function names, commit messages
+  and docs in ENGLISH, always, no exceptions (public international repo).
+  This is a public repo that receives third-party PRs — a single Spanish
+  comment breaks the professional impression. If you catch a Spanish
+  comment anywhere, translate it. The ONLY Spanish allowed is the
+  "Explicación para el dueño" written in chat (never in files).
 - Tests with vitest. Fixtures are git repos created programmatically in
   tmpdir (never committed fixtures with real history).
 - Every feature: entry in CHANGELOG.md (Keep a Changelog, strict semver)
   + a doc in docs/ explaining how it works.
 - Bundle schema changes = major or minor bump depending on compatibility.
-- The `scan` command ALWAYS prints the exact JSON before any submit.
+- `submit` ALWAYS prints the exact byte-for-byte JSON immediately before
+  the upload confirmation — unskippable, on every path. `scan` provides
+  that same exact JSON via `--json` and piped/non-TTY output; its default
+  TTY output is a human summary derived only from bundle fields.
 - If the repo's remote looks like it's on a known public host
   (github.com/gitlab.com/bitbucket.org), `scan` suggests connecting the
   GitHub App as an alternative (anti-cannibalization guardrail) — but
   WITHOUT blocking the scan: a known host != actually public, and without
-  network access there's no way to tell the difference. The CLI's PRIMARY
-  use case is exactly a private employer repo hosted on github.com;
-  blocking there would break the product. Real visibility verification is
-  left to `submit` (which does have network access).
+  network access there's no way to tell the difference. On a TTY it asks
+  "Continue locally? (Y/n)" (default yes); piped/non-TTY runs are never
+  prompted or blocked. The CLI's PRIMARY use case is exactly a private
+  employer repo hosted on github.com; blocking there would break the
+  product. Real visibility verification is left to `submit` (which does
+  have network access).
 - When closing out each milestone or large task, BEFORE the commit: write
   in the chat a short "Explicación para el dueño" (Explanation for the
   owner) — max 10 lines, in simple Spanish, no technical jargon. It must
