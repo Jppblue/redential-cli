@@ -1,0 +1,7 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Redential/redential-cli/security/policy
+    about: >-
+      Do not open a public issue for a security report. See SECURITY.md
+      for the private disclosure process and contact address.

@@ -1,5 +1,7 @@
 # Redential CLI
 
+<img src="docs/assets/bannercli.png" alt="Redential CLI — turn private work into an NDA-safe developer credential" width="100%">
+
 [![npm version](https://img.shields.io/npm/v/%40redential%2Fcli.svg)](https://www.npmjs.com/package/@redential/cli)
 [![CI](https://github.com/Redential/redential-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/Redential/redential-cli/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
@@ -13,40 +15,29 @@ leaves your machine.
 npx @redential/cli scan
 ```
 
-<!-- TODO: Add demo GIF: scan → review bundle → public Attested credential -->
-_Demo video coming soon: scan locally → review the exact bundle → claim your
-public credential._
+No login, no config, no global install. `scan` runs entirely locally and
+makes zero network calls.
 
-## What you get
+[Website](https://redential.com) · [Trust model](#trust-model) · [FAQ](#faq) · [Docs](#docs)
 
-The CLI is the private-work capture layer for Redential. It analyzes git
-history and implementation patterns locally, then turns bounded evidence
-from repositories you cannot connect into an **Attested capability profile**
-you can share.
+## How it works
 
-Your profile grows over time as you keep building and submit new evidence.
+Redential CLI analyzes git history and implementation patterns locally,
+then produces a bounded metadata bundle describing the skills and
+capabilities detected in repositories you cannot connect.
 
-Code is analyzed locally. Only the bounded metadata bundle can leave your
-machine, and only after explicit confirmation.
+You review the exact bundle before anything is uploaded. If you choose to
+submit it, Redential adds that evidence to an
+[**Attested capability profile**](#what-does-attested-actually-prove) you
+can share.
+
+Your source code never leaves your machine.
 
 <!-- TODO: Add screenshot of a public profile showing Attested private-work capabilities -->
-_Public profile screenshot coming soon._
 
-**Attested** means the evidence was derived locally from user-controlled
-repository data. It is reproducible and clearly separated from independently
-verified tiers. Local repository data can be manipulated, so the CLI never
-labels it as Verified.
+## Run it
 
-## Try it
-
-```bash
-npx @redential/cli scan
-```
-
-No login, no config, nothing installed globally. `scan` makes zero network
-calls and shows you a local summary; the exact JSON it would upload is one
-flag away (`--json`) and always shown in full before any upload. If you
-like what you see:
+When you want the result on your Redential profile:
 
 ```bash
 npx @redential/cli login    # device flow, one time
@@ -178,7 +169,24 @@ and what the provenance attestation actually proves.
 
 ## FAQ
 
-**Can't I just import a bunch of libraries to inflate my skills list?**
+### How does anyone know I actually did this work?
+The CLI doesn't claim to know — that's the whole point of the tier
+system. An Attested bundle says: *this machine's git history shows this
+activity, claimed by this identity.* Partial anchors back the claim
+(your commit emails are checked against your verified account emails,
+signed commits can't be forged retroactively without your key, and your
+activity cadence is consistency-checked server-side) — but none of that
+proves authorship, and the README never pretends it does.
+
+The real answer is what comes after: anyone can *claim* a history, but
+on Redential a claim can be challenged — a live defense, where you
+answer questions generated from your own bundle's numbers, in real
+time. Someone who did the work answers from memory. Someone who copied
+a history has nothing to remember. If you couldn't have done the work,
+you can't defend it — and an undefended claim stays visibly parked at
+the weakest tier, labeled as exactly what it is.
+
+### Can't I just import a bunch of libraries to inflate my skills list?
 No — a bare import alone rarely tags a skill. Most signatures require
 either a distinctive, unambiguous import specifier (not a generic package
 name shared across ecosystems) or an actual API-call shape from your own
@@ -192,7 +200,7 @@ nothing for Proven or Verified, which require live code or a defended
 session. Gaming metadata to look impressive on a tier that's already
 labeled "take this with a grain of salt" isn't much of a prize.
 
-**Can't I replay someone else's git history into a new repo and claim it?**
+### Can't I replay someone else's git history into a new repo and claim it?
 You could fabricate commit timestamps in a fresh repo — that's exactly why
 local data is explicitly the *weakest* tier, not the strongest. A replayed
 history still has to survive several partial anchors: signed commits (a
@@ -211,7 +219,7 @@ history is cheap; defending fabricated experience under questioning, in
 real time, is not. That gap is the actual security boundary, not the
 detection heuristics.
 
-**What exactly leaves my machine?**
+### What exactly leaves my machine?
 The bundle — byte for byte the JSON `redential scan --json` prints and
 `submit` always shows in full before asking for your confirmation, nothing
 added or enriched afterward. That's not a promise you have to take on
@@ -225,7 +233,7 @@ documented in [docs/schema.md](docs/schema.md), and the schema itself
 an unlisted field makes the bundle invalid by construction, not just by
 convention.
 
-**Why should I trust a CLI with my employer's code?**
+### Why should I trust a CLI with my employer's code?
 Because it never touches your employer's code in any form that leaves your
 laptop. It's local-only (`scan` is structurally network-free, not merely
 network-free by default), fully open source under Apache-2.0 so you can
@@ -238,7 +246,7 @@ And every published release carries a Sigstore-signed provenance
 attestation you can verify (`npm audit signatures`), proving it was built
 from this exact repository, not from someone's laptop.
 
-**What does "Attested" actually prove?**
+### What does "Attested" actually prove?
 Honestly, not that much on its own — and that's by design, not an
 oversight. "Attested" means: this person's local git history shows this
 pattern of activity, self-reported and falsifiable, with partial anchors
@@ -251,6 +259,24 @@ claim live. Think of Attested as "worth a follow-up question," not
 honest instead of letting a metadata bundle borrow credibility it hasn't
 earned. See [docs/principles.md](docs/principles.md) (principle 6,
 "Honest about trust") for the full reasoning.
+
+### Is this just a funnel for your SaaS?
+The honest answer: the CLI is the open-source capture layer for
+[Redential](https://redential.com), and Redential is a commercial product.
+Neither of those facts is hidden — you're reading them right now.
+
+What makes it a tool rather than a funnel: `scan` is fully useful
+standalone. No account, no login, no network — it analyzes your
+repo and shows you everything it found, locally, forever, for free. The
+platform only enters the picture if you decide the result is worth
+publishing, and nothing uploads until you've seen the exact payload and
+confirmed the prompt. There is no crippled mode, no "unlock full results" — the
+local analysis IS the full analysis.
+
+The business model is the credential platform. The CLI's job is to be
+trustworthy enough that you'd consider using it — which is why every
+privacy claim in this README maps to an executable test instead of a
+promise.
 
 ## Docs
 

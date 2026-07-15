@@ -1,0 +1,80 @@
+name: Data boundary change (required before any PR)
+description: >
+  Propose a change to WHAT data leaves the machine, or WHERE it's sent.
+  Mandatory discussion issue — do not open a PR for this category before
+  this issue exists and has been discussed.
+title: "[data-boundary]: "
+labels: ["data-boundary", "needs-discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Read this before filling the form.** Per CLAUDE.md and
+        `docs/principles.md`, any change to WHAT leaves the user's
+        machine — a new bundle field, a change to hashing/salting, a new
+        network call, a new value derived from repo content — requires a
+        discussion issue BEFORE any code is written. A PR in this area
+        without a prior issue is closed on sight, regardless of code
+        quality. This isn't about distrust of any specific contributor:
+        it's the one rule this project can't bend, because the whole
+        product is the promise that nothing beyond a bounded, reviewed
+        bundle ever leaves your machine.
+
+        If you're not sure whether your change falls in this category,
+        it probably does — file here rather than under "Feature request."
+
+  - type: textarea
+    id: fields
+    attributes:
+      label: Exact fields or data proposed
+      description: >
+        Be precise: field name(s), type, and a concrete example value —
+        not a general description. If this extends an existing bundle
+        section, say which one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: bounded
+    attributes:
+      label: Why is this bounded / closed-vocabulary?
+      description: >
+        Every value that leaves the machine today is an aggregate, a
+        salted hash, or a member of a closed public vocabulary
+        (`taxonomy.json`) — never free-form content derived from source
+        code. Explain how your proposal keeps that guarantee: is it an
+        aggregate? A hash? A new closed vocabulary, and if so, who
+        curates it and how is it capped?
+    validations:
+      required: true
+
+  - type: textarea
+    id: schema-impact
+    attributes:
+      label: Schema impact
+      description: >
+        Does this require a `schema/bundle.v1.json` version bump? Minor
+        (additive, backward compatible) or major (breaking)? What would
+        `docs/schema.md` need to say about the new field?
+    validations:
+      required: true
+
+  - type: textarea
+    id: privacy-test-plan
+    attributes:
+      label: Privacy test plan
+      description: >
+        What test in `test/privacy/` would prove this change still
+        respects the six principles in `docs/principles.md` — in
+        particular that the new data is bounded and that nothing
+        free-form derived from code content can appear in the output?
+        A rough sketch is fine at this stage; the actual test comes with
+        the PR.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Use case, alternatives considered, anything else relevant.

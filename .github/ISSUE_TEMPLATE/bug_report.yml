@@ -1,0 +1,87 @@
+name: Bug report
+description: Something in the CLI doesn't work as documented.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you paste anything below: this repo is public. The bundle
+        `scan`/`submit` produce is designed to never contain source code,
+        file names, or repo-identifying strings — but a manual repro,
+        error message, or screenshot you write yourself can still leak
+        that by accident. Please double-check what you paste.
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Exact command(s) you ran. If it depends on repo shape (languages,
+        number of commits, monorepo, etc.), describe that in general
+        terms rather than linking the real repo.
+      placeholder: |
+        1. redential scan --json
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error message/output if there is one.
+    validations:
+      required: true
+
+  - type: input
+    id: cli-version
+    attributes:
+      label: CLI version
+      description: Output of `redential --version` (or the npx-resolved version).
+      placeholder: "0.5.0"
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: "20.x / 22.x"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other (specify in "Additional context")
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else — logs, screenshots, related issues. Same rule as above applies.
+
+  - type: checkboxes
+    id: privacy-check
+    attributes:
+      label: Privacy check
+      options:
+        - label: >
+            I checked this report contains no private code, paths, repo
+            names, or names/emails of other people.
+          required: true

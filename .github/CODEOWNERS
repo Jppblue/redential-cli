@@ -1,0 +1,22 @@
+# CODEOWNERS
+#
+# These paths are the trust-critical zones described in
+# docs/principles.md: the closed skill vocabulary, the signature database
+# that feeds it, the schema that bounds every bundle field, the secret
+# scan and public-remote guardrails, the only code that ever touches the
+# network (login/submit/http-client), and the privacy test suite that
+# proves all of the above. A PR touching any of these requires review
+# from the maintainer listed below before merge, regardless of who else
+# has approved — per CLAUDE.md's sensitive-zones rule.
+
+/schema/                @Jppblue
+/taxonomy.json          @Jppblue
+/signatures/            @Jppblue
+/src/secret-scan.ts     @Jppblue
+/src/public-remote.ts   @Jppblue
+/src/submit.ts          @Jppblue
+/src/submit-command.ts  @Jppblue
+/src/login.ts           @Jppblue
+/src/http-client.ts     @Jppblue
+/test/privacy/          @Jppblue
+/.github/               @Jppblue

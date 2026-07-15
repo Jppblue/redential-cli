@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a new capability, detection signature category, or CLI improvement.
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this proposal would change WHAT data leaves the machine or
+        WHERE it's sent (new bundle field, new network call, changes to
+        hashing/salting, etc.), use the "Data boundary change" template
+        instead — that category has a mandatory, stricter process.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What's missing or frustrating today? Concrete, not hypothetical.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you'd like to see instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: north-star
+    attributes:
+      label: How does this make the credential more solid, trustworthy, or verifiable?
+      description: >
+        This is the bar every contribution is measured against — see
+        CONTRIBUTING.md. A feature that doesn't move this needle is
+        probably out of scope for this repo.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Alternatives considered, related issues, prior art.
