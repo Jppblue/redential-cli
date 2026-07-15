@@ -42,6 +42,33 @@ signatures): PRs welcome directly.
 - **Docs**: clarifying `docs/`, fixing a stale reference, improving an
   example.
 
+## Help harden the evidence (the contribution we want most)
+
+The whole point of this project is validating what a developer actually
+knows — without their code ever leaving their machine. The most valuable
+contribution isn't a new feature: it's making the credential **harder to
+fake and more meaningful to trust**. We actively want:
+
+- **Red-team reports.** Found a way to inflate or forge a signal — padded
+  imports, a replayed history, fabricated timestamps, a gamed structural
+  pattern? "Here's how I'd fake X", with a repro, is as welcome as a PR.
+  Open an issue (or use [SECURITY.md](SECURITY.md) if it's sensitive).
+- **Stronger structural evidence.** Anchor patterns that separate "used a
+  library" from "built the system" — see
+  [docs/proof-graph-spike.md](docs/proof-graph-spike.md) for how the
+  current payment-flow patterns work and what a new one needs.
+- **Better forensics.** Signals in the spirit of the existing
+  `date_forensics` heuristics that make forged histories more detectable —
+  always as bounded aggregates, never verdicts.
+
+The constraint that makes this problem interesting: every improvement
+must keep the NDA-safe premise. Evidence is derived locally and leaves
+the machine only as aggregates, salted hashes, or closed-vocabulary
+slugs ([docs/principles.md](docs/principles.md)). If your idea needs
+richer data to leave the machine, it starts with a
+[data-boundary discussion issue](.github/ISSUE_TEMPLATE/data_boundary_change.yml)
+— not with code.
+
 ## Adding a skill signature (most common contribution)
 
 If a technology's import unambiguously identifies it, this is a one-line

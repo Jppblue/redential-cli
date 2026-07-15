@@ -300,8 +300,11 @@ and grants stronger tiers than local metadata ever can.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) — most contributions are a
-one-line addition to a signature map. Bug reports and security issues:
-[SECURITY.md](SECURITY.md).
+one-line addition to a signature map. The contribution we want most:
+**help harden the evidence** — red-team the signals, propose stronger
+structural patterns, improve the forgery forensics — always within the
+NDA-safe premise (evidence leaves the machine only as bounded metadata).
+Bug reports and security issues: [SECURITY.md](SECURITY.md).
 
 ## License
 
