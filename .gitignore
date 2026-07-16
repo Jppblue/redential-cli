@@ -1,4 +1,8 @@
 node_modules/
 dist/
 .DS_Store
-.claude/
+# .claude/ is local session configuration and stays private, EXCEPT
+# .claude/skills/ — contributor-facing skills, published on purpose
+# (see CONTRIBUTING.md, "Working with an AI agent").
+.claude/*
+!.claude/skills/

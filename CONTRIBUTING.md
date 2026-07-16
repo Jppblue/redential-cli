@@ -139,6 +139,20 @@ npm run build      # tsc to dist/
 
 Requires Node.js >= 20.
 
+## Working with an AI agent
+
+If you contribute with an AI coding agent, this repo ships two skills
+for it (plain markdown, readable by humans too — agents that support
+project skills discover them automatically):
+
+- [`privacy-gate`](.claude/skills/privacy-gate/SKILL.md) — run the same
+  privacy review maintainers apply, before opening your PR.
+- [`add-signature`](.claude/skills/add-signature/SKILL.md) — the exact
+  steps and test contract for a new detection signature.
+
+Agent-assisted PRs are welcome here; PRs that ignore the gates above are
+not, however they were written.
+
 ## Further reading
 
 - [docs/principles.md](docs/principles.md) — the six non-negotiable rules
