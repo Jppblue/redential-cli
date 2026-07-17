@@ -7,6 +7,9 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+### Added
+- Add `ai/mcp` to the closed skill taxonomy for Model Context Protocol work.
+
 ### Changed
 - **Bare-name alias packages published: `redential` and `redential-cli`.**
   Two thin launcher packages, `packages/redential/` and
