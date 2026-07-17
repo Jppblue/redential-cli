@@ -42,6 +42,22 @@ signatures): PRs welcome directly.
 - **Docs**: clarifying `docs/`, fixing a stale reference, improving an
   example.
 
+## Your first PR, in five steps
+
+1. Pick an issue labeled
+   [`up-for-grabs`](https://github.com/Redential/redential-cli/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs)
+   or [`good first issue`](https://github.com/Redential/redential-cli/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+   — each one says exactly which files to touch and what "done" means.
+2. Comment on the issue to claim it, so two people don't do the same work.
+3. Follow "Adding a skill signature" below (or, if you work with an AI
+   coding agent, point it at the
+   [`add-signature`](.claude/skills/add-signature/SKILL.md) skill — it
+   walks the same path).
+4. Run `npm test` — new map entries and signature files are picked up
+   automatically, nothing to wire.
+5. Open the PR with a one-line `CHANGELOG.md` entry under `[Unreleased]`.
+   Expect a first response within 24–48 hours.
+
 ## Help harden the evidence (the contribution we want most)
 
 The whole point of this project is validating what a developer actually
@@ -87,12 +103,13 @@ its own before anything depends on it.
 
 If the import alone is ambiguous, or there's no import at all (a config
 file, a framework-inherited API), write a Tier 2 signature file at
-`signatures/<category>/<name>.json` instead. Every signature PR — Tier 1
-map entry or Tier 2 file — must include **at least one positive and one
-negative fixture**: the negative fixture has to be a genuine near-miss
-(mentions the library by name, doesn't just say something unrelated), not
-a rubber-stamp. Full detection rules and the exact test contract:
-[docs/signatures.md](docs/signatures.md).
+`signatures/<category>/<name>.json` instead. Every Tier 2 signature file
+must include **at least one positive and one negative fixture**: the
+negative fixture has to be a genuine near-miss (mentions the library by
+name, doesn't just say something unrelated), not a rubber-stamp. Tier 1
+map entries need no fixtures — they are pure data, validated by the
+existing load-time tests. Full detection rules and the exact test
+contract: [docs/signatures.md](docs/signatures.md).
 
 Either way: run `npm test` (it picks up new map entries and signature
 files automatically) and add a line to `CHANGELOG.md` under `[Unreleased]`
@@ -102,7 +119,8 @@ before opening the PR.
 
 - The privacy test suite (`test/privacy/`) is the contract: if your change
   breaks one of those tests, the change is wrong, not the test.
-- Signature PRs need both a positive and a negative fixture (see above).
+- Tier 2 signature files need both a positive and a negative fixture (see
+  above); Tier 1 map entries don't.
 - A slug must already exist in `taxonomy.json`; a new slug is a separate
   PR with a rationale, never bundled into the signature PR that needs it.
 - No new runtime dependencies without written justification in the PR
