@@ -300,7 +300,8 @@ and grants stronger tiers than local metadata ever can.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) — most contributions are a
-one-line addition to a signature map. The contribution we want most:
+one-line addition to a signature map, and starter issues are labeled
+[`up-for-grabs`](https://github.com/Redential/redential-cli/labels/up-for-grabs). The contribution we want most:
 **help harden the evidence** — red-team the signals, propose stronger
 structural patterns, improve the forgery forensics — always within the
 NDA-safe premise (evidence leaves the machine only as bounded metadata).
