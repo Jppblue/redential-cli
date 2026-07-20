@@ -471,6 +471,18 @@ function extractSwift(text: string, filePath: string): string[] {
   return isPackageSwiftManifest(filePath) ? extractPackageSwiftDependencies(text) : extractSwiftImport(text);
 }
 
+/** Tier 2 import/api pattern matching: block comments + whole comment lines only.
+ *  Deliberately does NOT blank template literals or string contents — apiPatterns
+ *  key on quoted API shapes and template-literal URLs (e.g. auth/oauth-oidc). */
+export function sanitizeForPatternMatching(addedLines: string): string {
+  const blank = (m: string) => m.replace(/[^\n]/g, " ");
+  const stripped = addedLines.replace(/\/\*[\s\S]*?\*\//g, blank);
+  return stripped
+    .split("\n")
+    .filter((line) => !isCommentLine(line))
+    .join("\n");
+}
+
 /**
  * Extracts normalized package names from one file's added diff lines.
  * `filePath` selects the language (and, for Ruby/PHP, distinguishes a
