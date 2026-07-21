@@ -2,13 +2,13 @@
 
 <div align="center">
 
-<p><img src="docs/assets/icon-pixel.svg" alt="Redential logo" height="88"></p>
+<p><img src="docs/assets/icon-pixel.svg?v=2" alt="Redential logo" height="88"></p>
 
-<p><img src="docs/assets/wordmark.svg?v=2" alt="REDENTIAL" height="44"></p>
+<p><img src="docs/assets/wordmark.svg?v=3" alt="REDENTIAL" height="44"></p>
 
 <p><picture>
-<source media="(prefers-color-scheme: dark)" srcset="docs/assets/tagline-dark.svg">
-<img src="docs/assets/tagline-light.svg" alt="private work into evidence." height="16">
+<source media="(prefers-color-scheme: dark)" srcset="docs/assets/tagline-dark.svg?v=2">
+<img src="docs/assets/tagline-light.svg?v=2" alt="private work into evidence." height="16">
 </picture></p>
 
 [![npm version](https://img.shields.io/npm/v/%40redential%2Fcli.svg)](https://www.npmjs.com/package/@redential/cli)
