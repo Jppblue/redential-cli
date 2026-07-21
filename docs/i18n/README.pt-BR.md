@@ -6,7 +6,7 @@
 
 <p><img src="../assets/icon-pixel.svg" alt="Redential logo" height="88"></p>
 
-<p><img src="../assets/wordmark.svg" alt="REDENTIAL" height="44"></p>
+<p><img src="../assets/wordmark.svg?v=2" alt="REDENTIAL" height="44"></p>
 
 <p><picture>
 <source media="(prefers-color-scheme: dark)" srcset="../assets/tagline-dark.svg">
