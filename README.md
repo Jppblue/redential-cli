@@ -2,7 +2,14 @@
 
 <div align="center">
 
-<img src="docs/assets/bannercli.png" alt="Redential CLI — turn private work into an NDA-safe developer credential" width="100%">
+<p><img src="docs/assets/icon-pixel.svg" alt="Redential logo" height="88"></p>
+
+<p><img src="docs/assets/wordmark.svg" alt="REDENTIAL" height="44"></p>
+
+<p><picture>
+<source media="(prefers-color-scheme: dark)" srcset="docs/assets/tagline-dark.svg">
+<img src="docs/assets/tagline-light.svg" alt="private work into evidence." height="16">
+</picture></p>
 
 [![npm version](https://img.shields.io/npm/v/%40redential%2Fcli.svg)](https://www.npmjs.com/package/@redential/cli)
 [![CI](https://github.com/Redential/redential-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/Redential/redential-cli/actions/workflows/ci.yml)

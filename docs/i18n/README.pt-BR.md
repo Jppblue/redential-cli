@@ -4,7 +4,14 @@
 
 [English](../../README.md) · [Español](README.es.md) · **Português (BR)** · [Français](README.fr.md) · [Italiano](README.it.md)
 
-<img src="../assets/bannercli.png" alt="Redential CLI: transforme trabalho privado em uma credencial de desenvolvedor NDA-safe" width="100%">
+<p><img src="../assets/icon-pixel.svg" alt="Redential logo" height="88"></p>
+
+<p><img src="../assets/wordmark.svg" alt="REDENTIAL" height="44"></p>
+
+<p><picture>
+<source media="(prefers-color-scheme: dark)" srcset="../assets/tagline-dark.svg">
+<img src="../assets/tagline-light.svg" alt="private work into evidence." height="16">
+</picture></p>
 
 [![npm version](https://img.shields.io/npm/v/%40redential%2Fcli.svg)](https://www.npmjs.com/package/@redential/cli)
 [![CI](https://github.com/Redential/redential-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/Redential/redential-cli/actions/workflows/ci.yml)
