@@ -1,8 +1,8 @@
+<h1 align="center">Redential CLI</h1>
+
 <div align="center">
 
 <img src="docs/assets/bannercli.png" alt="Redential CLI — turn private work into an NDA-safe developer credential" width="100%">
-
-# Redential CLI
 
 [![npm version](https://img.shields.io/npm/v/%40redential%2Fcli.svg)](https://www.npmjs.com/package/@redential/cli)
 [![CI](https://github.com/Redential/redential-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/Redential/redential-cli/actions/workflows/ci.yml)
