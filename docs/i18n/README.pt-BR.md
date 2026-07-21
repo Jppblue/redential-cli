@@ -15,13 +15,6 @@ Seu melhor trabalho provavelmente está sob um NDA.
 Transforme trabalho privado em uma credencial de desenvolvedor NDA-safe. Seu
 código nunca sai da sua máquina.
 
-```bash
-npx redential scan
-```
-
-Sem login, sem configuração, sem instalação global. O `scan` roda
-inteiramente local e não faz nenhuma chamada de rede.
-
 <img src="../assets/demo.gif" alt="npx redential scan sendo executado em um terminal: capacidades detectadas localmente, nada é enviado" width="100%">
 
 [Site](https://redential.com) · [Modelo de confiança](#modelo-de-confiança) · [FAQ](#faq) · [Documentação](#documentação)
@@ -29,6 +22,13 @@ inteiramente local e não faz nenhuma chamada de rede.
 </div>
 
 ## Como funciona
+
+```bash
+npx redential scan
+```
+
+Sem login, sem configuração, sem instalação global. O `scan` roda
+inteiramente local e não faz nenhuma chamada de rede.
 
 O Redential CLI analisa o histórico do git e os padrões de implementação
 localmente, e então produz um bundle (pacote de evidências) limitado de
