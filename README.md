@@ -18,6 +18,8 @@ npx redential scan
 No login, no config, no global install. `scan` runs entirely locally and
 makes zero network calls.
 
+<img src="docs/assets/demo.gif" alt="npx redential scan running in a terminal: capabilities detected locally, nothing uploaded" width="100%">
+
 [Website](https://redential.com) · [Trust model](#trust-model) · [FAQ](#faq) · [Docs](#docs)
 
 ## How it works
