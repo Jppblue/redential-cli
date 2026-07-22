@@ -39,8 +39,10 @@ jobs:
           cache: "npm"
 
       # OIDC trusted publishing requires npm >= 11.5; Node 20 runners ship
-      # npm 10, so upgrade the npm CLI itself before publishing.
-      - run: npm install -g npm@latest
+      # npm 10, so upgrade the npm CLI itself before publishing. Pinned to
+      # the npm 11 line on purpose: @latest broke this workflow the day
+      # npm 12 dropped Node 20 support (EBADENGINE, run 29930659781).
+      - run: npm install -g npm@11
 
       - run: npm ci
 
