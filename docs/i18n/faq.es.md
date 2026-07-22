@@ -125,3 +125,5 @@ es ser lo suficientemente confiable como para que consideres usarlo, y
 por eso cada afirmación de privacidad en este README corresponde a una
 prueba ejecutable en lugar de a una promesa.
 
+### ¿Qué pasa con los commits en pareja o asistidos por IA?
+El trabajo asistido por IA nunca se marca como menor. El bundle lleva señales honestas y acotadas sobre la participación de agentes (conteos de coautoría, booleanos de presencia de herramientas, jamás transcripts), así que nada se oculta, y la defensa evalúa lo que importa sin importar quién tipeó: si podés explicar y sostener las decisiones del trabajo publicado bajo tu nombre. Los commits en pareja heredan el modelo de git de un autor por commit: el autor del commit recibe la atribución, y el trailer no transfiere crédito de habilidades. Es una limitación real, dicha acá en vez de disimulada.

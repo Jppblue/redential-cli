@@ -199,6 +199,7 @@ e per cosa dimostra realmente l'attestazione di provenance.
 - [Perché dovrei fidarmi di una CLI con il codice del mio datore di lavoro?](faq.it.md#perché-dovrei-fidarmi-di-una-cli-con-il-codice-del-mio-datore-di-lavoro)
 - [Cosa dimostra realmente "Attested"?](faq.it.md#cosa-dimostra-realmente-attested)
 - [È solo un funnel per il vostro SaaS?](faq.it.md#è-solo-un-funnel-per-il-vostro-saas)
+- [E i commit in pair programming o assistiti dall'IA?](faq.it.md#e-i-commit-in-pair-programming-o-assistiti-dallia)
 
 ## Documentazione
 

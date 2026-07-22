@@ -199,6 +199,7 @@ release e o que a atestação de proveniência realmente comprova.
 - [Por que eu deveria confiar em um CLI com o código do meu empregador?](faq.pt-BR.md#por-que-eu-deveria-confiar-em-um-cli-com-o-código-do-meu-empregador)
 - [O que "Attested" realmente comprova?](faq.pt-BR.md#o-que-attested-realmente-comprova)
 - [Isso é apenas um funil para o seu SaaS?](faq.pt-BR.md#isso-é-apenas-um-funil-para-o-seu-saas)
+- [E os commits em par ou assistidos por IA?](faq.pt-BR.md#e-os-commits-em-par-ou-assistidos-por-ia)
 
 ## Documentação
 

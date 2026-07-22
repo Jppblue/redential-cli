@@ -203,6 +203,7 @@ release et ce que l'attestation de provenance prouve réellement.
 - [Pourquoi devrais-je faire confiance à un CLI avec le code de mon employeur ?](faq.fr.md#pourquoi-devrais-je-faire-confiance-à-un-cli-avec-le-code-de-mon-employeur-)
 - [Que prouve réellement Attested?](faq.fr.md#que-prouve-réellement-attested)
 - [Est-ce simplement un entonnoir vers votre SaaS ?](faq.fr.md#est-ce-simplement-un-entonnoir-vers-votre-saas-)
+- [Et les commits en binôme ou assistés par IA?](faq.fr.md#et-les-commits-en-binôme-ou-assistés-par-ia)
 
 ## Documentation
 

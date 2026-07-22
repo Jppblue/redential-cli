@@ -195,6 +195,7 @@ and what the provenance attestation actually proves.
 - [Why should I trust a CLI with my employer's code?](docs/faq.md#why-should-i-trust-a-cli-with-my-employers-code)
 - [What does "Attested" actually prove?](docs/faq.md#what-does-attested-actually-prove)
 - [Is this just a funnel for your SaaS?](docs/faq.md#is-this-just-a-funnel-for-your-saas)
+- [What about pair-programmed or AI-assisted commits?](docs/faq.md#what-about-pair-programmed-or-ai-assisted-commits)
 
 ## Docs
 

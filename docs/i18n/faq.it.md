@@ -123,3 +123,5 @@ CLI è essere abbastanza affidabile da farti prendere in considerazione il
 suo utilizzo: motivo per cui ogni affermazione sulla privacy in questo
 README corrisponde a un test eseguibile invece che a una promessa.
 
+### E i commit in pair programming o assistiti dall'IA?
+Il lavoro assistito dall'IA non viene mai segnato come inferiore. Il bundle porta segnali onesti e limitati sul coinvolgimento degli agenti (conteggi di co-authorship, booleani di presenza degli strumenti, mai transcript), quindi nulla viene nascosto, e la difesa verifica ciò che conta a prescindere da chi ha digitato: se sai spiegare e sostenere le decisioni del lavoro pubblicato a tuo nome. I commit in pair ereditano il modello git di un autore per commit: l'autore del commit riceve l'attribuzione, e il trailer non trasferisce credito di competenze. È un limite reale, detto qui invece che nascosto.

@@ -132,3 +132,5 @@ de l'utiliser, ce qui explique pourquoi chaque garantie de
 confidentialité de ce README correspond à un test exécutable plutôt
 qu'à une simple promesse.
 
+### Et les commits en binôme ou assistés par IA?
+Le travail assisté par IA n'est jamais marqué comme inférieur. Le bundle transporte des signaux honnêtes et bornés sur l'implication des agents (comptes de co-signature, booléens de présence d'outils, jamais de transcripts), donc rien n'est caché, et la défense teste ce qui compte peu importe qui a tapé: si vous pouvez expliquer et assumer les décisions du travail livré sous votre nom. Les commits en binôme héritent du modèle git d'un auteur par commit: l'auteur du commit reçoit l'attribution, et le trailer ne transfère pas le crédit de compétences. C'est une limite réelle, dite ici plutôt que masquée.

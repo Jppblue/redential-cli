@@ -201,6 +201,7 @@ proveniencia.
 - [¿Por qué debería confiarle a un CLI el código de mi empleador?](faq.es.md#por-qué-debería-confiarle-a-un-cli-el-código-de-mi-empleador)
 - [¿Qué prueba realmente "Attested"?](faq.es.md#qué-prueba-realmente-attested)
 - [¿Esto es solo un embudo para su SaaS?](faq.es.md#esto-es-solo-un-embudo-para-su-saas)
+- [¿Qué pasa con los commits en pareja o asistidos por IA?](faq.es.md#qué-pasa-con-los-commits-en-pareja-o-asistidos-por-ia)
 
 ## Documentación
 

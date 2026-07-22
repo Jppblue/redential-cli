@@ -121,3 +121,5 @@ confiável o suficiente para que você considere usá-lo, e é por isso que
 toda afirmação de privacidade neste README corresponde a um teste
 executável, em vez de uma promessa.
 
+### E os commits em par ou assistidos por IA?
+Trabalho assistido por IA nunca é marcado como inferior. O bundle carrega sinais honestos e limitados sobre o envolvimento de agentes (contagens de coautoria, booleanos de presença de ferramentas, nunca transcripts), então nada fica escondido, e a defesa testa o que importa independentemente de quem digitou: se você consegue explicar e sustentar as decisões do trabalho publicado em seu nome. Commits em par herdam o modelo do git de um autor por commit: o autor do commit recebe a atribuição, e o trailer não transfere crédito de habilidades. É uma limitação real, dita aqui em vez de maquiada.
