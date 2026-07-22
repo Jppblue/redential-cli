@@ -110,3 +110,12 @@ trustworthy enough that you'd consider using it — which is why every
 privacy claim in this README maps to an executable test instead of a
 promise.
 
+### What about pair-programmed or AI-assisted commits?
+AI-assisted work is never flagged as lesser. The bundle carries honest,
+bounded signals about agent involvement (co-authorship counts, tool
+presence booleans, never transcripts), so nothing is hidden, and the
+defense tests what matters regardless of who typed: whether you can
+explain and stand behind the decisions in work shipped under your name.
+Pair commits inherit git's one-author-per-commit model: the commit's
+author gets the attribution, and the trailer does not transfer skill
+credit. That is a real limitation, stated here rather than papered over.
