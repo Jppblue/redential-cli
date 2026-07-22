@@ -7,6 +7,11 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+### Fixed
+- Identity-confirmation prompt now uses the singular "commit" when the
+  author has exactly 1 commit, instead of always saying "commits"
+  (`Found 1 commit authored by ...`).
+
 ## [0.6.0] - 2026-07-22
 
 ### Fixed
