@@ -7,6 +7,8 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-22
+
 ### Fixed
 - Tier 2 `importPatterns`/`apiPatterns` no longer match line comments and
   block comments (honest-scan false positives such as `// supabase.from("x")`
