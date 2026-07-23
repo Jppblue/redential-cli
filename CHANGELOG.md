@@ -7,6 +7,12 @@ always bump at least minor; breaking schema changes bump major.
 
 ## [Unreleased]
 
+### Changed
+- Principle 2 ("Explicit") amended per RFC #13: append-only local state
+  (a future session-receipt vault) is explicitly permitted; resident
+  processes, hooks, IDE plugins, and any auto-emit remain forbidden.
+  Wording co-authored with @rudi193-cmd. Docs only — no behavior change.
+
 ### Fixed
 - Fix the author identity prompt showing "1 commits" instead of "1 commit" when a single commit is found.
 

@@ -18,9 +18,19 @@ patterns). No LLMs, no remote inference, no exceptions.
 ## 2. Explicit
 
 Nothing is uploaded without the user running `redential submit` and
-confirming. There is no daemon, no watch mode, no background process, no
-telemetry. One-shot by design: git is already the journal, a retroactive scan
-reconstructs everything.
+confirming. **No daemon, no watch mode, no background process**, no
+telemetry. Session bookends are one-shot commands. A vault file may persist
+**append-only receipts** between bookends; nothing reads it except the next
+one-shot `finish` or `submit`. No hooks, no IDE plugins, no auto-emit.
+
+The distinction that matters: forbidden is anything RESIDENT — a process
+that polls, a hook that fires, anything that emits without the user typing
+a command at that moment. Permitted is inert, append-only local state that
+one-shot commands leave behind and later one-shot commands read
+(RFC: [#13](https://github.com/Redential/redential-cli/issues/13)).
+
+For scanning, one-shot stays the whole story: git is already the journal, a
+retroactive scan reconstructs everything.
 
 ## 3. Bounded output
 
