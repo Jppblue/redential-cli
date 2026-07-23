@@ -226,7 +226,7 @@ describe("promptUseGitIdentity — Y/n confirmation, Y default", () => {
     expect(out.text()).toBe("Found 1,378 commits authored by you@example.com. Use this identity? (Y/n) ");
   });
 
-   it("prints singular commit wording for one commit", async () => {
+  it("prints singular commit wording for one commit", async () => {
     const out = captureOutput();
     await promptUseGitIdentity(
       { email: "you@example.com", count: 1 },
