@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://redential.com/schema/anchor.v0.discussion.json",
+  "title": "Redential vault anchor record v0 (discussion)",
+  "description": "Server-side anchor summary for RFC #13 evidence vault. NOT wired — reserved for schema ceremony. Default privacy profile: coarse activity buckets only; no gap exposure.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity_hash",
+    "chain_id",
+    "seq",
+    "prev_anchor_hash",
+    "head_hash",
+    "receipt_count_total",
+    "receipt_count_since_prev",
+    "max_finished_at_claimed",
+    "received_at_server",
+    "activity_period",
+    "first_anchor_at",
+    "reset_reason",
+    "privacy_profile"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "anchor.v0.discussion",
+      "description": "Discussion pin only. Bump to anchor.v1 after ceremony."
+    },
+    "identity_hash": {
+      "type": "string",
+      "minLength": 16,
+      "description": "Salted author identity hash (bundle-compatible family)."
+    },
+    "chain_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Stable lineage per credential identity. Forks on reset, never silent splice."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic per chain_id. Genesis is 0."
+    },
+    "prev_anchor_hash": {
+      "type": ["string", "null"],
+      "description": "SHA-256 of canonical prior anchor JSON. Null on genesis."
+    },
+    "head_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 of local vault head at submit."
+    },
+    "receipt_count_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cumulative receipts in this chain_id."
+    },
+    "receipt_count_since_prev": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Receipts in segment since previous anchor."
+    },
+    "max_finished_at_claimed": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Max finished_at across segment receipts (client-claimed). Server applies epsilon window."
+    },
+    "received_at_server": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Authoritative server ingest time."
+    },
+    "activity_period": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-Q[1-4]$",
+      "description": "Coarse activity bucket derived from received_at_server. DEFAULT profile — no finer granularity."
+    },
+    "first_anchor_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Genesis anchor time for this chain_id. Flags anchor-timing arbitrage."
+    },
+    "reset_reason": {
+      "type": ["string", "null"],
+      "enum": [null, "genesis", "operator_reset", "device_migration"],
+      "description": "Null on normal append. Set on fork — revoke forward, not delete."
+    },
+    "privacy_profile": {
+      "const": "default",
+      "description": "Only profile at launch: coarse buckets, gap non-exposure. No per-session server timestamps."
+    }
+  }
+}
